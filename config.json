@@ -1,0 +1,30 @@
+{
+  "tithe": {
+    "rate": 0.1,
+    "base": "net",
+    "rounding": "ceil",
+    "rounding_unit": 100,
+    "include_bonus": true,
+    "include_side_income": true,
+    "add_back_savings_deduction": false,
+    "carry_over_enabled": true
+  },
+  "cards": {
+    "aeon_gold": {
+      "name": "イオンゴールドカード",
+      "file_pattern": "^meisai\\d{6}\\.csv$",
+      "encoding": "shift_jis",
+      "closing_day": 10,
+      "payment_day": 2,
+      "settlement_account_id": "mizuho_main"
+    }
+  },
+  "analysis": {
+    "start_month": "2025-12",
+    "_note": "この月より前の利用日の取引は取り込まない。最古のCSV（2026-01請求分）の利用日が2025-10-30始まりのため、2025-11は上旬が構造的に欠け、2025-10は2件しかない。給与明細も2025-12支給分からしかなく、収支が成立しない。2025-12は3ファイルで全日カバーされている"
+  },
+  "display": {
+    "unknown_category": "不明",
+    "review_category": "要確認"
+  }
+}

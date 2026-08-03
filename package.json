@@ -1,0 +1,20 @@
+{
+  "name": "kakei-manager",
+  "version": "1.0.0",
+  "private": true,
+  "description": "家計管理ダッシュボード（ローカル完結・依存パッケージゼロ）",
+  "type": "module",
+  "scripts": {
+    "import": "node scripts/import-card.js",
+    "import:payslip": "node scripts/import-payslip.js",
+    "generate": "node scripts/generate-fixed.js",
+    "summary": "node scripts/calc-summary.js",
+    "build": "node scripts/build.js",
+    "build:web": "node scripts/build-web.js",
+    "update": "npm run import && npm run import:payslip && npm run generate && npm run build && npm run build:web",
+    "review": "node scripts/reclassify.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow, noarchive, nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>家計管理ダッシュボード</title>
+<style>/*__STYLE__*/</style>
+<style>
+/* 合言葉の入力画面 */
+.gate { min-height: 100dvh; display: grid; place-items: center; padding: 24px; }
+.gate-card {
+  width: 100%; max-width: 380px; background: var(--surface);
+  border: 1px solid var(--border); border-radius: 12px; padding: 28px 26px; box-shadow: var(--shadow);
+}
+.gate-title { font-size: 17px; font-weight: 650; margin: 0 0 6px; }
+.gate-sub { color: var(--muted); font-size: 12.5px; margin: 0 0 20px; line-height: 1.6; }
+.gate-form { display: flex; flex-direction: column; gap: 12px; }
+.gate-form input[type="password"] {
+  border: 1px solid var(--border); background: var(--plane); color: var(--ink);
+  border-radius: 8px; padding: 11px 13px; font: inherit; font-size: 15px; width: 100%;
+}
+.gate-form input[type="password"]:focus { outline: 2px solid var(--series-1); outline-offset: -1px; }
+.gate-form button {
+  background: var(--ink); color: var(--surface); border: none; border-radius: 8px;
+  padding: 11px 16px; font: inherit; font-size: 14px; font-weight: 600; cursor: pointer;
+}
+.gate-form button:disabled { opacity: .55; cursor: default; }
+.gate-remember { display: flex; align-items: center; gap: 8px; color: var(--ink-2); font-size: 12.5px; }
+.gate-err { color: var(--critical); font-size: 12.5px; min-height: 1.2em; }
+.gate-note { color: var(--muted); font-size: 11.5px; margin-top: 18px; line-height: 1.6; border-top: 1px solid var(--border); padding-top: 14px; }
+</style>
+</head>
+<body>
+
+<div class="gate" id="gate">
+  <div class="gate-card">
+    <h1 class="gate-title">家計管理ダッシュボード</h1>
+    <p class="gate-sub">このページの内容は暗号化されています。合言葉を入力すると、お使いのブラウザの中だけで復号して表示します。</p>
+    <form class="gate-form" id="gate-form">
+      <input type="password" id="pass" placeholder="合言葉" autocomplete="current-password" autofocus>
+      <label class="gate-remember">
+        <input type="checkbox" id="remember" checked>
+        このブラウザに記憶する（次回から自動で開く）
+      </label>
+      <div class="gate-err" id="gate-err"></div>
+      <button type="submit" id="gate-btn">開く</button>
+    </form>
+    <p class="gate-note">合言葉はサーバーに送られません。暗号文の復号はすべてブラウザ内（Web Crypto API）で行われ、鍵は PBKDF2 で合言葉から導出されます。</p>
+  </div>
+</div>
+
+<div class="wrap" id="app" hidden>
+
+  <div class="page-head">
+    <div>
+      <h1 class="page-title">家計管理ダッシュボード</h1>
+      <p class="page-sub" id="page-sub"></p>
+    </div>
+    <div style="display:flex; gap:8px">
+      <button class="theme-toggle" id="theme" type="button">🌙 ダーク</button>
+      <button class="theme-toggle" id="lock" type="button">🔒 ロック</button>
+    </div>
+  </div>
+
+  <div id="banners"></div>
+  <div class="filterbar" id="filters"></div>
+
+  <div class="grid">
+    <section class="card"><div class="hero-row" id="hero"></div></section>
+
+    <section class="card">
+      <div class="card-head">
+        <h2 class="card-title">月次支出の推移</h2>
+        <span class="card-note">利用日ベース／棒をタップすると期間を切り替えます</span>
+      </div>
+      <div id="trend"></div>
+    </section>
+
+    <section class="card span-8">
+      <div class="card-head">
+        <h2 class="card-title">カテゴリ別支出</h2>
+        <span class="card-note" id="cat-note"></span>
+      </div>
+      <div id="categories"></div>
+    </section>
+
+    <section class="card span-4">
+      <div class="card-head"><h2 class="card-title">固定費と変動費</h2></div>
+      <div id="fixedsplit"></div>
+    </section>
+
+    <section class="card span-6">
+      <div class="card-head"><h2 class="card-title">献金（手取り基準）</h2></div>
+      <div id="tithe"></div>
+    </section>
+
+    <section class="card span-6">
+      <div class="card-head">
+        <h2 class="card-title">要確認キュー</h2>
+        <span class="card-note">分類が確定していない取引</span>
+      </div>
+      <div id="review"></div>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <h2 class="card-title">固定費一覧</h2>
+        <span class="card-note" id="fixed-note"></span>
+      </div>
+      <div id="fixedlist"></div>
+    </section>
+
+    <section class="card span-6">
+      <div class="card-head"><h2 class="card-title">口座残高</h2></div>
+      <div id="accounts"></div>
+    </section>
+
+    <section class="card span-6">
+      <div class="card-head"><h2 class="card-title">カード引落予定</h2></div>
+      <div id="payments"></div>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <h2 class="card-title">店舗別 支出 TOP20</h2>
+        <span class="card-note" id="mer-note"></span>
+      </div>
+      <div id="merchants"></div>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <h2 class="card-title">取引一覧</h2>
+        <span class="card-note">見出しをタップで並べ替え</span>
+      </div>
+      <div class="controls">
+        <input class="input" id="f-search" type="search" placeholder="店名・備考で検索" autocomplete="off">
+        <select class="select" id="f-category"><option value="">すべてのカテゴリ</option></select>
+      </div>
+      <div id="txtable"></div>
+    </section>
+  </div>
+</div>
+
+<div id="tip" role="status" aria-live="polite"></div>
+
+<script>
+const PAYLOAD = /*__PAYLOAD__*/null;
+const APP_SRC = /*__APP_SRC__*/"";
+const SUBTITLE = /*__SUBTITLE__*/"";
+const STORE_KEY = 'kakei-pass';
+
+const b64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+
+async function decrypt(passphrase) {
+  const enc = new TextEncoder();
+  const baseKey = await crypto.subtle.importKey('raw', enc.encode(passphrase), 'PBKDF2', false, ['deriveKey']);
+  const key = await crypto.subtle.deriveKey(
+    { name: 'PBKDF2', salt: b64(PAYLOAD.salt), iterations: PAYLOAD.iterations, hash: 'SHA-256' },
+    baseKey,
+    { name: 'AES-GCM', length: 256 },
+    false,
+    ['decrypt'],
+  );
+  const plain = await crypto.subtle.decrypt(
+    { name: 'AES-GCM', iv: b64(PAYLOAD.iv) }, key, b64(PAYLOAD.data),
+  );
+  return new TextDecoder().decode(plain);
+}
+
+function boot(json) {
+  document.getElementById('gate').remove();
+  const app = document.getElementById('app');
+  app.hidden = false;
+  document.getElementById('page-sub').textContent = SUBTITLE;
+  // 復号したデータを DATA として注入し、ローカル版とまったく同じ描画コードを走らせる
+  const s = document.createElement('script');
+  s.textContent = 'const DATA = ' + json + ';\n' + APP_SRC;
+  document.body.appendChild(s);
+  document.getElementById('lock').addEventListener('click', () => {
+    try { localStorage.removeItem(STORE_KEY); } catch {}
+    location.reload();
+  });
+}
+
+const form = document.getElementById('gate-form');
+const err = document.getElementById('gate-err');
+const btn = document.getElementById('gate-btn');
+
+async function tryUnlock(pass, remember) {
+  btn.disabled = true;
+  err.textContent = '';
+  try {
+    const json = await decrypt(pass);
+    if (remember) { try { localStorage.setItem(STORE_KEY, pass); } catch {} }
+    boot(json);
+    return true;
+  } catch {
+    btn.disabled = false;
+    return false;
+  }
+}
+
+form.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const pass = document.getElementById('pass').value;
+  if (!pass) return;
+  btn.textContent = '復号中…';
+  const ok = await tryUnlock(pass, document.getElementById('remember').checked);
+  if (!ok) {
+    btn.textContent = '開く';
+    err.textContent = '合言葉が違います。';
+    document.getElementById('pass').select();
+  }
+});
+
+// 記憶済みなら自動で開く
+(async () => {
+  let saved = null;
+  try { saved = localStorage.getItem(STORE_KEY); } catch {}
+  if (saved) {
+    const ok = await tryUnlock(saved, true);
+    if (!ok) { try { localStorage.removeItem(STORE_KEY); } catch {} }
+  }
+})();
+
+// テーマは復号前から効かせる
+(() => {
+  let saved = null;
+  try { saved = localStorage.getItem('kakei-theme'); } catch {}
+  const mode = saved ?? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+  document.documentElement.setAttribute('data-theme', mode);
+})();
+</script>
+</body>
+</html>
