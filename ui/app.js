@@ -33,25 +33,84 @@ const state = {
   sort: { key: 'date', dir: 'desc' },
 };
 
+// ------------------------------------------------------------------ motion
+
+// OS の「視差効果を減らす」設定。動きは全部ここで殺せるようにする
+const REDUCE = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
+let firstPaint = true;   // 棒の伸長などは初回のみ。切替のたびに再生すると鬱陶しい
+
+/**
+ * 数値を from → to へ数える。桁が読めない瞬間を作らないよう、ロールではなく加算。
+ *
+ * ★ 要素には最初から最終値が入っている状態で呼ぶこと。
+ *   先に from を書き込むと、rAF が動かない環境（バックグラウンドタブなど）で
+ *   古い数字のまま表示され続ける。「動かないなら正しい値のまま」が安全側。
+ */
+function countTo(node, from, to, ms, tailHtml) {
+  const set = (v) => { node.innerHTML = yenFmt(v) + tailHtml; };
+  if (REDUCE || ms === 0 || from === to) { set(to); return; }
+  const t0 = performance.now();
+  let done = false;
+  const ease = (p) => 1 - Math.pow(1 - p, 4);   // easeOutQuart：減速だけ。跳ねさせない
+  const step = (t) => {
+    if (done) return;
+    const p = Math.min(1, (t - t0) / ms);
+    set(Math.round(from + (to - from) * ease(p)));
+    if (p < 1) requestAnimationFrame(step);
+    else done = true;
+  };
+  requestAnimationFrame(step);
+  // rAF が途中で止まっても、中途半端な数字のまま固定されないようにする
+  setTimeout(() => { if (!done) { done = true; set(to); } }, ms + 150);
+}
+
+/**
+ * 表示を差し替える間、対象カードを一段沈めて「更新された」ことを伝える。
+ *
+ * ★ mutate() は必ず同期で呼ぶ。
+ *   以前は requestAnimationFrame の中で呼んでいたが、rAF が来ない状況
+ *   （バックグラウンドタブ、省電力、ヘッドレス）では画面が更新されないまま
+ *   沈んだ状態で固まった。演出は失敗してよいが、表示の更新は失敗してはいけない。
+ *   .card 自体は作り替えられず中身だけ差し替わるので、沈めたまま更新して
+ *   次フレームで戻せば、新しい内容がフェードインする。
+ */
+function swapCards(mutate) {
+  if (REDUCE) { mutate(); return; }
+  const cards = [...document.querySelectorAll('.card')];
+  cards.forEach((c) => c.classList.add('is-swapping'));
+  mutate();
+  const clear = () => cards.forEach((c) => c.classList.remove('is-swapping'));
+  requestAnimationFrame(clear);
+  setTimeout(clear, 400);   // rAF が来なくても必ず戻す
+}
+
 // ------------------------------------------------------------------ tooltip
 
 const tip = $('#tip');
+let tipW = 0, tipH = 0, tipRaf = 0, tipEvt = null;
+
 function showTip(evt, html) {
   tip.innerHTML = html;
-  tip.style.opacity = '1';
+  tip.classList.add('is-on');
+  // 計測は内容が変わったときだけ。mousemove ごとに測ると強制同期レイアウトになる
+  const r = tip.getBoundingClientRect();
+  tipW = r.width; tipH = r.height;
   moveTip(evt);
 }
 function moveTip(evt) {
-  const pad = 14;
-  const r = tip.getBoundingClientRect();
-  let x = evt.clientX + pad;
-  let y = evt.clientY - r.height - 8;
-  if (x + r.width > window.innerWidth - 8) x = evt.clientX - r.width - pad;
-  if (y < 8) y = evt.clientY + pad;
-  tip.style.left = x + 'px';
-  tip.style.top = y + 'px';
+  tipEvt = evt;
+  if (tipRaf) return;
+  tipRaf = requestAnimationFrame(() => {
+    tipRaf = 0;
+    const pad = 14;
+    let x = tipEvt.clientX + pad;
+    let y = tipEvt.clientY - tipH - 8;
+    if (x + tipW > window.innerWidth - 8) x = tipEvt.clientX - tipW - pad;
+    if (y < 8) y = tipEvt.clientY + pad;
+    tip.style.transform = `translate3d(${x}px, ${y}px, 0)`;
+  });
 }
-function hideTip() { tip.style.opacity = '0'; }
+function hideTip() { tip.classList.remove('is-on'); }
 
 // ------------------------------------------------------------------ 派生データ
 
@@ -69,6 +128,13 @@ state.month = completeMonths.length ? completeMonths[completeMonths.length - 1].
 const scoped = () => (state.month ? TX.filter((t) => t.date.slice(0, 7) === state.month) : TX);
 
 // ------------------------------------------------------------------ 描画
+
+/** 期間を切り替える。押した直後の反応は遅らせず、表示の入れ替えだけを滑らかにする */
+function selectMonth(month) {
+  if (state.month === month) return;
+  state.month = month;
+  swapCards(render);
+}
 
 function render() {
   renderBanner();
@@ -136,13 +202,13 @@ function renderFilterBar() {
   host.replaceChildren(el('span', { class: 'filterbar-label', text: '対象期間' }));
   host.appendChild(el('button', {
     class: 'chip', type: 'button', 'aria-pressed': state.month === null,
-    onclick: () => { state.month = null; render(); },
+    onclick: () => selectMonth(null),
   }, ['全期間']));
   for (const m of months) {
     host.appendChild(el('button', {
       class: 'chip', type: 'button', 'aria-pressed': state.month === m.month,
       title: m.incomplete ? 'カード明細の範囲外の日があり、この月は不完全です' : '',
-      onclick: () => { state.month = m.month; render(); },
+      onclick: () => selectMonth(m.month),
     }, [m.month, m.incomplete ? el('span', { class: 'chip-mark', text: '不完全' }) : null]));
   }
 }
@@ -182,10 +248,14 @@ function renderHero() {
   // 前月比では除外しているのに収支だけ素通しなのは筋が通らないので注記する。
   const incompleteIncluded = state.month === null && months.some((m) => m.incomplete);
 
+  // 前月の値から数え上げる。0 から数えるより「先月からこう動いた」が伝わる
+  const prevTotal = delta ? total - delta.d : null;
+  const heroValue = el('div', { class: 'hero-value', html: yenFmt(total) + '<span class="unit">円</span>' });
+
   $('#hero').replaceChildren(
     el('div', { class: 'hero' }, [
       el('div', { class: 'hero-label', text: label }),
-      el('div', { class: 'hero-value', html: yenFmt(total) + '<span class="unit">円</span>' }),
+      heroValue,
       delta
         ? el('div', {
             class: 'hero-delta',
@@ -204,7 +274,17 @@ function renderHero() {
       tile('要確認', String(reviews.length), '件', reviews.length === 0 ? 'なし' : '分類が未確定'),
     ].filter(Boolean)),
   );
+
+  // 初回は前月値（無ければ0）から900ms、切替時は前の表示値から420ms。
+  // 差が5%未満なら数えない（ちらつくだけで情報にならない）
+  const from = firstPaint ? (prevTotal ?? 0) : (lastHeroTotal ?? total);
+  const diffRatio = total === 0 ? 0 : Math.abs(total - from) / Math.abs(total);
+  countTo(heroValue, from, total, diffRatio < 0.05 ? 0 : (firstPaint ? 900 : 420),
+    '<span class="unit">円</span>');
+  lastHeroTotal = total;
 }
+
+let lastHeroTotal = null;
 
 function tile(label, value, unit, sub) {
   return el('div', { class: 'tile' }, [
@@ -247,6 +327,16 @@ function renderTrend() {
       class: 'bar', d, fill: m.incomplete ? 'url(#hatch)' : 'var(--series-1)',
       opacity: selected || state.month === null ? 1 : 0.42,
     });
+    // 初回だけ左から順に立ち上げる。時間の経過を身体で分からせる。
+    // ★ height や d ではなく transform を使う（毎フレームの再ラスタライズを避ける）
+    // ★ transform-box: fill-box が無いと原点がSVG座標系になって崩れる
+    if (!REDUCE && firstPaint) {
+      bar.style.transformBox = 'fill-box';
+      bar.style.transformOrigin = 'bottom';
+      bar.style.transform = 'scaleY(0)';
+      bar.style.transition = `transform var(--dur-figure) var(--e-figure) ${i * 55}ms`;
+      requestAnimationFrame(() => requestAnimationFrame(() => { bar.style.transform = 'scaleY(1)'; }));
+    }
     svg.appendChild(bar);
 
     svg.appendChild(el('text', {
@@ -268,7 +358,7 @@ function renderTrend() {
       onmouseleave: () => { bar.classList.remove('is-hover'); hideTip(); },
       // チップと挙動を揃える（以前は再クリックで全期間に戻るトグルで、
       // 「もう一度見ようとしたら全期間に戻った」という事故になっていた）
-      onclick: () => { state.month = m.month; render(); },
+      onclick: () => selectMonth(m.month),
     });
     hit.style.cursor = 'pointer';
     svg.appendChild(hit);
@@ -308,6 +398,7 @@ function renderCategories() {
   const max = Math.max(...cats.map((c) => c.amount), 1);
 
   const list = el('div', { class: 'barlist' });
+  let ri = 0;
   for (const c of cats) {
     const pct = total ? (c.amount / total) * 100 : 0;
     const subs = c.subs.filter((s) => s.name !== '—').slice(0, 4);
@@ -316,12 +407,25 @@ function renderCategories() {
     list.appendChild(el('div', { class: 'barrow' }, [
       el('div', { class: 'barrow-name', text: c.category, title: c.category }),
       el('div', { class: 'barrow-track' }, [
-        el('div', {
-          class: 'barrow-fill',
-          style: `width: ${Math.max(0.4, (c.amount / max) * 100)}%`,
-          onmousemove: (e) => showTip(e, `<div class="t-val">${yenFmt(c.amount)}円</div><div class="t-sub">${esc(c.category)}・${c.count}件・${pct.toFixed(1)}%</div>${tipDelta}`),
-          onmouseleave: hideTip,
-        }),
+        (() => {
+          const fill = el('div', {
+            class: 'barrow-fill',
+            style: `width: ${Math.max(0.4, (c.amount / max) * 100)}%`,
+            onmousemove: (e) => showTip(e, `<div class="t-val">${yenFmt(c.amount)}円</div><div class="t-sub">${esc(c.category)}・${c.count}件・${pct.toFixed(1)}%</div>${tipDelta}`),
+            onmouseleave: hideTip,
+          });
+          // 最終幅のまま scaleX(0)→1。width を動かすと毎フレーム再レイアウトになり、
+          // かつ角丸が横に引き伸ばされて歪む
+          if (!REDUCE && firstPaint) {
+            const d = ri * 40;
+            fill.style.transformOrigin = 'left';
+            fill.style.transform = 'scaleX(0)';
+            fill.style.transition = `transform 620ms var(--e-figure) ${d}ms`;
+            requestAnimationFrame(() => requestAnimationFrame(() => { fill.style.transform = 'scaleX(1)'; }));
+          }
+          ri++;
+          return fill;
+        })(),
       ]),
       el('div', { class: 'barrow-val' }, [
         el('span', { text: yenFmt(c.amount) }),
@@ -770,15 +874,58 @@ function initControls() {
   let saved = null;
   try { saved = localStorage.getItem('kakei-theme'); } catch {}
   apply(saved ?? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'));
-  toggle.addEventListener('click', () => {
-    apply(document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark');
+
+  // 押した指の位置から夜が広がる。View Transitions のスナップショット1枚に対して
+  // clip-path をかけるだけなので、要素数に関係なくコンポジタで完結する
+  toggle.addEventListener('click', (ev) => {
+    const next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+    if (REDUCE || !document.startViewTransition) { apply(next); return; }
+    const b = toggle.getBoundingClientRect();
+    const x = b.left + b.width / 2;
+    const y = b.top + b.height / 2;
+    const r = Math.hypot(Math.max(x, innerWidth - x), Math.max(y, innerHeight - y));
+    const vt = document.startViewTransition(() => apply(next));
+    vt.ready.then(() => {
+      document.documentElement.animate(
+        { clipPath: [`circle(0px at ${x}px ${y}px)`, `circle(${r}px at ${x}px ${y}px)`] },
+        { duration: 520, easing: 'cubic-bezier(.65,0,.35,1)', pseudoElement: '::view-transition-new(root)' },
+      );
+    }).catch(() => {});
   });
 
-  window.addEventListener('mousemove', (e) => { if (tip.style.opacity === '1') moveTip(e); });
+  window.addEventListener('mousemove', (e) => { if (tip.classList.contains('is-on')) moveTip(e); });
 }
 
 initControls();
 render();
+
+/**
+ * カードを下から順に立ち上げる。
+ * ★ js-motion は「JS がここまで到達した」証明でもある。先に CSS で
+ *   opacity:0 にしておくと、JS が落ちたとき画面が真っ白のまま戻らない。
+ */
+if (!REDUCE) {
+  const cards = [...document.querySelectorAll('.card')];
+  document.documentElement.classList.add('js-motion');   // ここで全カードが opacity:0 になる
+  cards.forEach((c, i) => { c.style.transitionDelay = `${Math.min(i, 5) * 60}ms`; });
+  // 開始状態を1フレーム描かせないとトランジションが起きない
+  requestAnimationFrame(() => cards.forEach((c) => c.classList.add('is-in')));
+
+  /**
+   * ★ 保険：内容が見えないまま残ることだけは絶対に避ける。
+   *
+   * is-in を付けるだけでは足りない。is-in は「トランジションで opacity 1 になる」
+   * 指定なので、トランジションが走らない環境（省電力・バックグラウンド・
+   * 一部のヘッドレス）では opacity:0 の基底ルールが残って見えないままになる。
+   * そこで js-motion ごと外し、opacity を指定しない素の状態に戻す。
+   */
+  setTimeout(() => {
+    document.documentElement.classList.remove('js-motion');
+    cards.forEach((c) => { c.style.transitionDelay = ''; });
+  }, 1200);
+}
+
+firstPaint = false;   // 以降の再描画では伸長アニメーションを再生しない
 
 // Web版（暗号化）の boot() が「描画まで到達したか」を判定するための目印。
 // これが立たないまま復号ゲートを閉じると、空の枠だけが残って復帰不能になる。
