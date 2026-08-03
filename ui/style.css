@@ -7,7 +7,10 @@
   --plane: #f9f9f7;
   --ink: #0b0b0b;
   --ink-2: #52514e;
-  --muted: #898781;
+  /* #898781 は対サーフェス 3.50:1 で WCAG AA（4.5:1）未達だった。
+     この色は .chart text（軸ラベル）や .barrow-subs（実額）など
+     「データそのもの」に使われるため、装飾扱いにはできない。→ 4.76:1 */
+  --muted: #737169;
   --grid: #e1e0d9;
   --baseline: #c3c2b7;
   --border: rgba(11, 11, 11, 0.10);
@@ -17,6 +20,9 @@
   --good: #0ca30c;
   --good-text: #006300;
   --warning: #fab219;
+  /* 塗り用の --warning はライトで 1.79:1 しかなく、境界線やアイコンには使えない。
+     線・記号用に濃い方を分ける（5.08:1）。塗り(--warning)は背景色としてのみ使う */
+  --warning-line: #a05c00;
   --critical: #d03b3b;
   --shadow: 0 1px 2px rgba(11, 11, 11, 0.04);
 }
@@ -36,6 +42,11 @@
     --series-2: #d95926;
     --series-3: #199e70;
     --good-text: #0ca30c;
+    /* ダークでは #898781 が 4.85:1 で合格するのでそのまま。
+       逆に --warning は暗背景で 9.50:1 あるため、線用も塗り用と同じでよい */
+    --warning-line: #fab219;
+    /* #d03b3b は暗背景で 3.62:1 しかなく、前月比などの文字色に使うと不足 → 6.13:1 */
+    --critical: #f0736f;
     --shadow: none;
   }
 }
@@ -54,6 +65,8 @@
   --series-2: #d95926;
   --series-3: #199e70;
   --good-text: #0ca30c;
+  --warning-line: #fab219;
+  --critical: #f0736f;
   --shadow: none;
 }
 
@@ -90,7 +103,7 @@ body {
 
 .banner {
   display: flex; gap: 10px; align-items: flex-start;
-  border: 1px solid var(--border); border-left: 3px solid var(--warning);
+  border: 1px solid var(--border); border-left: 3px solid var(--warning-line);
   background: var(--surface); border-radius: 8px;
   padding: 12px 16px; margin-bottom: 20px; font-size: 13px;
 }
@@ -161,13 +174,13 @@ body {
 .chart { width: 100%; display: block; overflow: visible; }
 .chart text { fill: var(--muted); font-size: 11px; }
 .chart .lbl-value { fill: var(--ink); font-size: 11.5px; font-weight: 600; font-variant-numeric: tabular-nums; }
-.chart .lbl-cat { fill: var(--ink-2); font-size: 12px; }
 .chart .baseline { stroke: var(--baseline); stroke-width: 1; }
-.chart .gridline { stroke: var(--grid); stroke-width: 1; }
-.chart .bar { fill: var(--series-1); }
-.chart .bar.is-dim { fill: var(--baseline); }
 .chart .hit { fill: transparent; cursor: pointer; }
-.chart .hit:hover + .bar, .chart .bar:hover { filter: brightness(1.08); }
+/* 棒の強調は JS が .is-hover を付け外しする。
+   （以前は `.hit:hover + .bar` と書いていたが、.hit は各月の最後に置かれるため
+     隣接兄弟にならず、しかも棒に class 自体が無かったので一度も発火していなかった） */
+.chart .bar { transition: opacity .12s linear; }
+.chart .bar.is-hover { opacity: 1 !important; }
 
 .legend { display: flex; flex-wrap: wrap; gap: 6px 18px; margin-top: 12px; }
 .legend-item { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; color: var(--ink-2); }
@@ -217,9 +230,25 @@ tbody tr:last-child td { border-bottom: none; }
   background: var(--plane); border: 1px solid var(--border);
   color: var(--ink-2); font-size: 11px; white-space: nowrap;
 }
-.tag.is-review { border-color: var(--warning); color: var(--ink); }
-.tag.is-fixed { border-color: var(--series-3); }
-.tag.is-refund { border-color: var(--good); }
+/* 1px の境界線の色だけに意味を持たせない。
+   3種が横に並ぶと線1本では判別できず、色覚特性によっては区別が消えるため、
+   淡い塗りを併用して手がかりを2つにする（文字色も濃い方に揃える） */
+.tag.is-review {
+  border-color: var(--warning-line); color: var(--ink);
+  background: color-mix(in srgb, var(--warning) 16%, var(--surface));
+}
+.tag.is-fixed {
+  border-color: var(--series-1); color: var(--ink);
+  background: color-mix(in srgb, var(--series-1) 12%, var(--surface));
+}
+.tag.is-refund {
+  border-color: var(--good); color: var(--ink);
+  background: color-mix(in srgb, var(--good) 12%, var(--surface));
+}
+
+/* テーブルの行ホバーが 1.026:1 でほぼ不可視だった（ダークでは行が沈んでいた）。
+   surface に ink を薄く混ぜれば、両モードで「浮く」方向に揃う */
+tbody tr:hover td { background: color-mix(in srgb, var(--ink) 6%, var(--surface)); }
 
 .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; flex: none; }
 

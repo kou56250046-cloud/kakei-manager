@@ -149,7 +149,19 @@ function renderHero() {
     ? (DATA.incomes ?? []).filter((i) => i.date.slice(0, 7) === state.month).reduce((a, i) => a + (i.net_amount ?? 0), 0)
     : (DATA.incomes ?? []).reduce((a, i) => a + (i.net_amount ?? 0), 0);
 
-  const t = titheRows.length ? titheRows[titheRows.length - 1] : null;
+  // 収入のあった「月数」。incomes.length はレコード数（給与＋児童手当）なので
+  // そのまま出すと「13ヶ月分」のような誤った表示になる。
+  const incomeMonths = new Set((DATA.incomes ?? []).map((i) => i.date.slice(0, 7))).size;
+
+  // 累積未献金は、全期間表示なら最新月、月を選んでいればその月時点の値を出す
+  // （他の4タイルが選択月スコープなのに、ここだけ常に最終月を指していた）
+  const t = state.month
+    ? titheRows.find((r) => r.month === state.month) ?? null
+    : (titheRows.length ? titheRows[titheRows.length - 1] : null);
+
+  // 全期間表示のとき、支出には不完全な月が混ざるが収入は満額入る。
+  // 前月比では除外しているのに収支だけ素通しなのは筋が通らないので注記する。
+  const incompleteIncluded = state.month === null && months.some((m) => m.incomplete);
 
   $('#hero').replaceChildren(
     el('div', { class: 'hero' }, [
@@ -164,9 +176,12 @@ function renderHero() {
     ]),
     el('div', { class: 'tiles' }, [
       tile('取引件数', String(rows.length), '件'),
-      tile('手取り収入', yenFmt(income), '円', state.month ? '給与明細より' : `${(DATA.incomes ?? []).length}ヶ月分`),
-      income > 0 ? tile('収支', yenFmt(income - total), '円', income - total >= 0 ? '黒字' : '赤字') : null,
-      t ? tile('累積未献金', yenFmt(t.carryOver), '円', `${t.month} 時点`) : null,
+      tile('手取り収入', yenFmt(income), '円', state.month ? '給与明細より' : `${incomeMonths}ヶ月分`),
+      income > 0
+        ? tile('収支', yenFmt(income - total), '円',
+            (income - total >= 0 ? '黒字' : '赤字') + (incompleteIncluded ? '（不完全な月を含む）' : ''))
+        : tile('収支', '—', '', '収入データなし'),
+      t ? tile('累積未献金', yenFmt(t.carryOver), '円', `${t.month} 時点`) : tile('累積未献金', '—', '', '収入データなし'),
       tile('要確認', String(reviews.length), '件', reviews.length === 0 ? 'なし' : '分類が未確定'),
     ].filter(Boolean)),
   );
@@ -209,10 +224,11 @@ function renderTrend() {
     // 4px の角丸データ端・ベースライン側は角なし
     const r = Math.min(4, h);
     const d = `M${x},${padT + innerH} L${x},${y + r} Q${x},${y} ${x + r},${y} L${x + barW - r},${y} Q${x + barW},${y} ${x + barW},${y + r} L${x + barW},${padT + innerH} Z`;
-    svg.appendChild(el('path', {
-      d, fill: m.incomplete ? 'url(#hatch)' : 'var(--series-1)',
+    const bar = el('path', {
+      class: 'bar', d, fill: m.incomplete ? 'url(#hatch)' : 'var(--series-1)',
       opacity: selected || state.month === null ? 1 : 0.42,
-    }));
+    });
+    svg.appendChild(bar);
 
     svg.appendChild(el('text', {
       class: 'lbl-value', x: x + barW / 2, y: y - 8, 'text-anchor': 'middle', text: yenFmt(m.amount),
@@ -227,9 +243,13 @@ function renderTrend() {
 
     const hit = el('rect', {
       class: 'hit', x: padL + band * i, y: padT, width: band, height: innerH,
+      'aria-hidden': 'true',
+      onmouseenter: () => bar.classList.add('is-hover'),
       onmousemove: (e) => showTip(e, `<div class="t-val">${yenFmt(m.amount)}円</div><div class="t-sub">${esc(m.month)}・${m.count}件${m.incomplete ? '・明細範囲外あり' : ''}</div>`),
-      onmouseleave: hideTip,
-      onclick: () => { state.month = state.month === m.month ? null : m.month; render(); },
+      onmouseleave: () => { bar.classList.remove('is-hover'); hideTip(); },
+      // チップと挙動を揃える（以前は再クリックで全期間に戻るトグルで、
+      // 「もう一度見ようとしたら全期間に戻った」という事故になっていた）
+      onclick: () => { state.month = m.month; render(); },
     });
     hit.style.cursor = 'pointer';
     svg.appendChild(hit);
@@ -244,8 +264,14 @@ function renderTrend() {
 }
 
 /** カテゴリ別（横棒・単一色のランキング）。値と構成比を直接ラベルする＝表を兼ねる。 */
+/** 期間フィルタに追随するカードに、対象期間を明示する（追随しないカードと見分けるため） */
+function scopeLabel() {
+  return state.month ?? '全期間';
+}
+
 function renderCategories() {
   const host = $('#categories');
+  $('#cat-note').textContent = scopeLabel();
   const cats = byCategory(TX, state.month);
   const total = cats.reduce((a, c) => a + c.amount, 0);
   host.replaceChildren();
@@ -305,7 +331,26 @@ function renderFixedSplit() {
       `変動費 ${yenFmt(fv.variable)}円（${(100 - fPct).toFixed(1)}%）`,
     ]),
   ]));
-  host.appendChild(el('div', { class: 'hint', text: '固定費はカード払いの光熱費・サブスクに付けた印から集計しています（口座振替分は未登録）。' }));
+  // 注記はデータから生成する。以前は「口座振替分は未登録」と固定文で書いていたが、
+  // 家賃などを登録した時点で嘘になり、二重に足し算する事故につながっていた。
+  const methods = new Map([['bank_transfer', '口座振替'], ['card', 'カード'], ['cash', '現金']]);
+  const used = new Set();
+  for (const t of TX) {
+    if (!t.is_fixed_cost) continue;
+    if (state.month && t.date.slice(0, 7) !== state.month) continue;
+    used.add(methods.get(t.payment_method) ?? (t.source === 'card' ? 'カード' : 'その他'));
+  }
+  // 警告するのは「生成する設定なのに金額が無い」ものだけ。
+  // auto_generate: false のもの（イオンカード払い）は CSV に実額が出るため
+  // amount が null でも集計から漏れていない。ここを区別しないと注記自体が嘘になる。
+  const unset = (DATA.fixedCosts ?? []).filter(
+    (f) => f.auto_generate === true && f.amount === null && f.amount_type !== 'computed',
+  );
+  host.appendChild(el('div', {
+    class: 'hint',
+    text: `固定費として印を付けた取引から集計しています（${[...used].join('・') || '該当なし'}）。`
+      + (unset.length ? `　⚠ ${unset.map((f) => f.name).join('・')} は金額未登録のため含まれていません。` : ''),
+  }));
 }
 
 function renderTithe() {
@@ -462,6 +507,7 @@ function renderReview() {
 
 function renderMerchants() {
   const host = $('#merchants');
+  $('#mer-note').textContent = scopeLabel();
   const list = byMerchant(TX, state.month).slice(0, 20);
   host.replaceChildren();
   if (list.length === 0) { host.appendChild(el('div', { class: 'empty', text: 'データがありません' })); return; }
@@ -531,10 +577,20 @@ function renderAccounts() {
       el('tbody', {}, list),
     ]),
   ]));
+  // 注記は状況に応じて出し分ける。以前は「基準日以降のデータがまだない」と
+  // 無条件に断言していたため、来月データが入って差額が出た瞬間に嘘になり、
+  // 実際の記録漏れを見逃させる文面になっていた。
+  const allZero = withData.every((r) => r.diff === 0);
+  const latest = withData.map((r) => r.asOf).sort().pop();
+  const hasNewer = TX.some((t) => t.date > latest);
   host.appendChild(el('div', {
     class: 'hint',
     text: '理論残高は「基準日の実残高 ＋ その後の収入 − その後の支出」で計算します。'
-      + '基準日以降のデータがまだないため現在は実残高と一致します。差額（＝記録漏れ）は次回の残高入力から意味を持ちます。',
+      + (allZero && !hasNewer
+        ? '　基準日以降の取引がまだないため、現在は実残高と一致します。次回の残高入力から差額が意味を持ちます。'
+        : allZero
+          ? '　差額なし。記録漏れは見つかっていません。'
+          : '　⚠ 差額は記録漏れの可能性があります（現金支出など）。'),
   }));
 }
 
