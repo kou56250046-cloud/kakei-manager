@@ -86,6 +86,51 @@ export function byCategory(transactions, month = null) {
   return list.sort((a, b) => b.amount - a.amount);
 }
 
+/**
+ * カテゴリ別に前月比を付ける。
+ *
+ * 月1回しか開かないツールで一番知りたいのは「今月いくら使ったか」ではなく
+ * 「先月と何が違ったか」。金額だけ並べても、その額が「いつも通り」なのか
+ * 「今月だけ高い」のかが読み取れない。
+ *
+ * ※ このファイルは公開HTMLに埋め込まれる。コメントに実際の金額を書かないこと
+ *   （書くとビルド時の平文混入チェックで弾かれる）。
+ *
+ * 不完全な月（カード明細の範囲外の日がある月）は比較に使わない。
+ * 前月比を出すと誤った減少に見えるため（ヒーローの前月比と同じ扱い）。
+ */
+export function byCategoryWithDelta(transactions, month, months) {
+  const cur = byCategory(transactions, month);
+  if (!month) return { rows: cur, prevMonth: null, disappeared: [] };
+
+  const idx = (months ?? []).findIndex((m) => m.month === month);
+  const curInfo = months?.[idx];
+  const prevInfo = months?.[idx - 1];
+  if (!curInfo || !prevInfo || curInfo.incomplete || prevInfo.incomplete) {
+    return { rows: cur, prevMonth: null, disappeared: [] };
+  }
+
+  const prev = new Map(byCategory(transactions, prevInfo.month).map((c) => [c.category, c.amount]));
+  const rows = cur.map((c) => {
+    const before = prev.get(c.category);
+    return {
+      ...c,
+      prevAmount: before ?? 0,
+      // 前月に無かったカテゴリは「増えた」ではなく「新規」として扱う
+      isNew: before === undefined,
+      delta: before === undefined ? null : c.amount - before,
+    };
+  });
+
+  // 前月にあって今月ゼロになったもの（減少としては最も大きいのに、行が無いと見えない）
+  const disappeared = [...prev.entries()]
+    .filter(([name]) => !cur.some((c) => c.category === name))
+    .map(([name, amount]) => ({ category: name, amount }))
+    .sort((a, b) => b.amount - a.amount);
+
+  return { rows, prevMonth: prevInfo.month, disappeared };
+}
+
 /** 店舗別集計（表示名でまとめる） */
 export function byMerchant(transactions, month = null) {
   const map = new Map();
@@ -204,6 +249,56 @@ export function accountBalances(accounts, balances, incomes, transactions) {
       asOf: latest.date,
     };
   });
+}
+
+/**
+ * 引落に残高が足りるかを突合する。
+ *
+ * カード引落額（明細の「今回ご請求金額」）と口座残高は、どちらも既にデータとして
+ * 持っているのに別々の場所に表示されていて、突き合わせていなかった。
+ * 残高不足は延滞・手数料という実損に直結する、この家計ツールで数少ない
+ * 「行動に繋がる警告」なので、明示的に計算する。
+ *
+ * 貯蓄口座は原資に数えない（動かすには本人の判断が要るため）。
+ */
+export function settlementRisk(accounts, balances, importLog, today) {
+  const t = today ?? new Date().toISOString().slice(0, 10);
+
+  // 引落先の口座（role に card_payment を持つもの）
+  const payer = (accounts ?? []).find((a) => (a.roles ?? []).includes('card_payment'));
+  if (!payer) return null;
+
+  const snaps = (balances ?? [])
+    .filter((b) => b.account_id === payer.id)
+    .sort((a, b) => a.date.localeCompare(b.date));
+  const latest = snaps[snaps.length - 1];
+  if (!latest) return null;
+
+  // 未来（当日を含む）の引落予定
+  const upcoming = (importLog ?? [])
+    .filter((e) => e.payment_date && e.payment_date >= t && e.billed)
+    .sort((a, b) => a.payment_date.localeCompare(b.payment_date));
+  if (upcoming.length === 0) return null;
+
+  const next = upcoming[0];
+  const balance = latest.actual_balance;
+  const shortfall = next.billed - balance;
+
+  return {
+    account: payer,
+    balance,
+    balanceDate: latest.date,
+    date: next.payment_date,
+    amount: next.billed,
+    billingMonth: next.billing_month,
+    shortfall,                          // 正なら不足
+    covered: shortfall <= 0,
+    // 残高の基準日と引落日が同じ場合、引落後の残高を見ている可能性がある
+    sameDay: latest.date === next.payment_date,
+    daysLeft: Math.round((Date.parse(next.payment_date) - Date.parse(t)) / 86400000),
+    totalUpcoming: upcoming.reduce((a, e) => a + e.billed, 0),
+    upcomingCount: upcoming.length,
+  };
 }
 
 /** 未払いのカード請求（引落予定） */

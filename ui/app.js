@@ -58,6 +58,7 @@ function hideTip() { tip.style.opacity = '0'; }
 const months = markIncompleteMonths(monthlyTotals(TX), DATA.importLog, DATA.config?.analysis?.start_month);
 const titheRows = titheByMonth(DATA.incomes, DATA.tithe, DATA.config, TX);
 const payments = upcomingPayments(DATA.importLog, DATA.today);
+const risk = settlementRisk(DATA.accounts, DATA.balances, DATA.importLog, DATA.today);
 const reviews = reviewQueue(TX);
 const mismatches = (DATA.importLog ?? []).filter((e) => e.status === 'MISMATCH');
 
@@ -88,6 +89,24 @@ function render() {
 function renderBanner() {
   const host = $('#banners');
   host.replaceChildren();
+
+  // 残高不足は延滞・手数料という実損に直結する。この画面で最も優先度が高い警告
+  if (risk && !risk.covered) {
+    const when = risk.daysLeft <= 0 ? '本日' : `${risk.daysLeft}日後（${risk.date}）`;
+    host.appendChild(el('div', { class: 'banner is-critical' }, [
+      el('span', { class: 'banner-icon', text: '⚠' }),
+      el('div', {
+        class: 'banner-body',
+        html: `<strong>引落に残高が足りません</strong>：${when}に <strong>${yenFmt(risk.amount)}円</strong> の引落予定に対し、`
+          + `${esc(risk.account.name)}の残高は ${yenFmt(risk.balance)}円（${esc(risk.balanceDate)}時点）。`
+          + `<strong>${yenFmt(risk.shortfall)}円 不足</strong>しています。`
+          + (risk.sameDay
+            ? '　※ 残高の基準日と引落日が同じため、既に引き落とし済みの残高を見ている可能性があります。'
+            : ''),
+      }),
+    ]));
+  }
+
   if (mismatches.length > 0) {
     host.appendChild(el('div', { class: 'banner is-critical' }, [
       el('span', { class: 'banner-icon', text: '⚠' }),
@@ -263,16 +282,26 @@ function renderTrend() {
   ]));
 }
 
-/** カテゴリ別（横棒・単一色のランキング）。値と構成比を直接ラベルする＝表を兼ねる。 */
 /** 期間フィルタに追随するカードに、対象期間を明示する（追随しないカードと見分けるため） */
 function scopeLabel() {
   return state.month ?? '全期間';
 }
 
+/** 増減の表示。支出は「増えたら赤」（家計では増加が悪い） */
+function deltaEl(delta, isNew) {
+  if (isNew) return el('span', { class: 'barrow-delta is-new', text: '新規' });
+  if (delta === null || delta === 0) return el('span', { class: 'barrow-delta is-flat', text: '±0' });
+  return el('span', {
+    class: 'barrow-delta ' + (delta > 0 ? 'is-up' : 'is-down'),
+    text: (delta > 0 ? '▲ +' : '▼ −') + yenFmt(Math.abs(delta)),
+  });
+}
+
+/** カテゴリ別（横棒・単一色のランキング）。値と構成比を直接ラベルする＝表を兼ねる。 */
 function renderCategories() {
   const host = $('#categories');
-  $('#cat-note').textContent = scopeLabel();
-  const cats = byCategory(TX, state.month);
+  const { rows: cats, prevMonth, disappeared } = byCategoryWithDelta(TX, state.month, months);
+  $('#cat-note').textContent = scopeLabel() + (prevMonth ? `　前月比 vs ${prevMonth}` : '');
   const total = cats.reduce((a, c) => a + c.amount, 0);
   host.replaceChildren();
   if (cats.length === 0) { host.appendChild(el('div', { class: 'empty', text: 'この期間の支出はありません' })); return; }
@@ -282,23 +311,38 @@ function renderCategories() {
   for (const c of cats) {
     const pct = total ? (c.amount / total) * 100 : 0;
     const subs = c.subs.filter((s) => s.name !== '—').slice(0, 4);
+    const tipDelta = prevMonth && !c.isNew && c.delta !== null
+      ? `<div class="t-sub">前月 ${yenFmt(c.prevAmount)}円 → ${c.delta >= 0 ? '+' : '−'}${yenFmt(Math.abs(c.delta))}円</div>` : '';
     list.appendChild(el('div', { class: 'barrow' }, [
       el('div', { class: 'barrow-name', text: c.category, title: c.category }),
       el('div', { class: 'barrow-track' }, [
         el('div', {
           class: 'barrow-fill',
           style: `width: ${Math.max(0.4, (c.amount / max) * 100)}%`,
-          onmousemove: (e) => showTip(e, `<div class="t-val">${yenFmt(c.amount)}円</div><div class="t-sub">${esc(c.category)}・${c.count}件・${pct.toFixed(1)}%</div>`),
+          onmousemove: (e) => showTip(e, `<div class="t-val">${yenFmt(c.amount)}円</div><div class="t-sub">${esc(c.category)}・${c.count}件・${pct.toFixed(1)}%</div>${tipDelta}`),
           onmouseleave: hideTip,
         }),
       ]),
-      el('div', { class: 'barrow-val', html: `${yenFmt(c.amount)}<span class="barrow-pct">${pct.toFixed(1)}%</span>` }),
+      el('div', { class: 'barrow-val' }, [
+        el('span', { text: yenFmt(c.amount) }),
+        el('span', { class: 'barrow-pct', text: `${pct.toFixed(1)}%` }),
+        prevMonth ? deltaEl(c.delta, c.isNew) : null,
+      ].filter(Boolean)),
       subs.length > 1
         ? el('div', { class: 'barrow-subs', text: subs.map((s) => `${s.name} ${yenFmt(s.amount)}`).join('　/　') })
         : null,
     ]));
   }
   host.appendChild(list);
+
+  // 前月にあって今月ゼロになったカテゴリ。「最も減ったもの」なのに
+  // 行が存在しないため、リストだけでは絶対に気づけない
+  if (disappeared.length > 0) {
+    host.appendChild(el('div', {
+      class: 'hint',
+      text: `前月にあって今月なし：${disappeared.map((d) => `${d.category} −${yenFmt(d.amount)}`).join('　/　')}`,
+    }));
+  }
 }
 
 /** 固定費と変動費（2系列＝凡例必須） */
@@ -598,20 +642,49 @@ function renderPayments() {
   const host = $('#payments');
   host.replaceChildren();
   if (payments.length === 0) { host.appendChild(el('div', { class: 'empty', text: '引落予定はありません' })); return; }
-  const rows = payments.map((p) => el('tr', {}, [
-    el('td', { class: p.past ? '' : 'strong', text: p.date }),
-    el('td', { text: p.label }),
-    el('td', { class: 'num strong', text: yenFmt(p.amount) }),
-    el('td', {}, [el('span', { class: 'tag', text: p.past ? '引落済' : '予定' })]),
-  ]));
-  host.appendChild(el('div', { class: 'tbl-wrap' }, [
-    el('table', {}, [
-      el('thead', {}, [el('tr', {}, [
-        el('th', { text: '引落日' }), el('th', { text: '内容' }), el('th', { class: 'num', text: '金額' }), el('th', { text: '状態' }),
-      ])]),
-      el('tbody', {}, rows),
-    ]),
-  ]));
+
+  // 行動に繋がるのは「次回」だけ。過去の引落済みが上を占めて
+  // 未来の予定が最下行に埋没していたので、次回を主役に置き直す
+  const upcoming = payments.filter((p) => !p.past);
+  const past = payments.filter((p) => p.past);
+
+  if (upcoming.length > 0) {
+    const n = upcoming[0];
+    const days = Math.round((Date.parse(n.date) - Date.parse(DATA.today)) / 86400000);
+    const when = days <= 0 ? '本日' : days === 1 ? '明日' : `${days}日後`;
+    host.appendChild(el('div', { class: 'nextpay' + (risk && !risk.covered ? ' is-short' : '') }, [
+      el('div', { class: 'nextpay-label', text: '次の引落' }),
+      el('div', { class: 'nextpay-value', html: yenFmt(n.amount) + '<span class="unit">円</span>' }),
+      el('div', { class: 'nextpay-sub', text: `${when}・${n.date}　${n.label}` }),
+      risk
+        ? el('div', {
+            class: 'nextpay-check ' + (risk.covered ? 'is-ok' : 'is-short'),
+            text: risk.covered
+              ? `✅ ${risk.account.name} の残高 ${yenFmt(risk.balance)}円で足ります`
+              : `⚠ ${risk.account.name} の残高 ${yenFmt(risk.balance)}円 → ${yenFmt(risk.shortfall)}円 不足`,
+          })
+        : el('div', { class: 'nextpay-check', text: '口座残高が未登録のため、足りるか判定できません' }),
+    ]));
+  }
+
+  if (past.length > 0) {
+    const rows = past.slice().reverse().map((p) => el('tr', {}, [
+      el('td', { text: p.date }),
+      el('td', { text: p.label }),
+      el('td', { class: 'num', text: yenFmt(p.amount) }),
+    ]));
+    host.appendChild(el('details', { class: 'foldable' }, [
+      el('summary', { text: `引落済み ${past.length}件を表示` }),
+      el('div', { class: 'tbl-wrap' }, [
+        el('table', {}, [
+          el('thead', {}, [el('tr', {}, [
+            el('th', { text: '引落日' }), el('th', { text: '内容' }), el('th', { class: 'num', text: '金額' }),
+          ])]),
+          el('tbody', {}, rows),
+        ]),
+      ]),
+    ]));
+  }
   host.appendChild(el('div', { class: 'hint', text: 'カード請求額は明細の「今回ご請求金額」から自動取得しています（手入力なし）。' }));
 }
 

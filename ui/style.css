@@ -199,6 +199,16 @@ body {
 }
 .barrow-val { font-size: 12.5px; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .barrow-pct { color: var(--muted); font-weight: 400; font-size: 11.5px; margin-left: 6px; }
+
+/* 前月比。家計では支出の増加が悪いので、増＝赤 / 減＝緑 */
+.barrow-delta {
+  display: inline-block; min-width: 74px; text-align: right;
+  font-size: 11.5px; font-weight: 600; margin-left: 8px;
+  font-variant-numeric: tabular-nums;
+}
+.barrow-delta.is-up { color: var(--critical); }
+.barrow-delta.is-down { color: var(--good-text); }
+.barrow-delta.is-flat, .barrow-delta.is-new { color: var(--muted); font-weight: 400; }
 .barrow-subs { grid-column: 2 / -1; color: var(--muted); font-size: 11.5px; margin-top: -4px; }
 
 /* --------------------------------------------------------- split (2 series) */
@@ -207,6 +217,27 @@ body {
 .split-seg { height: 22px; }
 .split-seg.s1 { background: var(--series-1); border-radius: 4px 0 0 4px; }
 .split-seg.s2 { background: var(--series-2); border-radius: 0 4px 4px 0; }
+
+/* ------------------------------------------------------------ 次の引落 */
+
+.nextpay {
+  border: 1px solid var(--border); border-radius: 8px;
+  padding: 14px 16px; margin-bottom: 14px; background: var(--plane);
+}
+.nextpay.is-short { border-color: var(--critical); border-left-width: 3px; }
+.nextpay-label { color: var(--muted); font-size: 11.5px; }
+.nextpay-value { font-size: 30px; font-weight: 640; line-height: 1.2; letter-spacing: -.01em; font-variant-numeric: tabular-nums; }
+.nextpay-value .unit { font-size: 14px; font-weight: 500; color: var(--ink-2); margin-left: 3px; letter-spacing: 0; }
+.nextpay-sub { color: var(--ink-2); font-size: 12.5px; margin-top: 2px; }
+.nextpay-check { font-size: 12.5px; margin-top: 8px; font-weight: 600; }
+.nextpay-check.is-ok { color: var(--good-text); }
+.nextpay-check.is-short { color: var(--critical); }
+
+.foldable > summary {
+  cursor: pointer; color: var(--ink-2); font-size: 12.5px;
+  padding: 6px 0; user-select: none;
+}
+.foldable > summary:hover { color: var(--ink); }
 
 /* ---------------------------------------------------------------- tables */
 

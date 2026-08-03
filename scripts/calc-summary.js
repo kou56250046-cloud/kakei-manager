@@ -2,7 +2,7 @@ import { join } from 'node:path';
 import { ROOT, dataPath, readJson, readAllTransactions } from './lib/io.js';
 import {
   monthlyTotals, markIncompleteMonths, byCategory, byMerchant,
-  fixedVsVariable, titheByMonth, reviewQueue, yenFmt,
+  fixedVsVariable, titheByMonth, reviewQueue, settlementRisk, yenFmt,
 } from '../ui/summary.js';
 
 /**
@@ -27,6 +27,18 @@ if (transactions.length === 0) {
 }
 
 const months = markIncompleteMonths(monthlyTotals(transactions), importLog, config?.analysis?.start_month);
+
+// 残高不足は実損に直結するので、集計より先に出す
+const accounts = readJson(dataPath('accounts.json'), []);
+const balances = readJson(dataPath('balances.json'), []);
+const risk = settlementRisk(accounts, balances, importLog);
+if (risk && !risk.covered) {
+  console.log('\n⚠ 引落に残高が足りません');
+  console.log(`  ${risk.date}（${risk.daysLeft <= 0 ? '本日' : risk.daysLeft + '日後'}）  引落 ${yenFmt(risk.amount)}円`);
+  console.log(`  ${risk.account.name}  残高 ${yenFmt(risk.balance)}円（${risk.balanceDate}時点）`);
+  console.log(`  → ${yenFmt(risk.shortfall)}円 不足`);
+  if (risk.sameDay) console.log('  ※ 残高の基準日と引落日が同じため、引落後の残高を見ている可能性があります');
+}
 const bar = (n, max, width = 28) => '█'.repeat(Math.max(0, Math.round((n / max) * width)));
 
 console.log('\n━━━━━━━━━━━━━━━━ 月次支出（利用日ベース） ━━━━━━━━━━━━━━━━');
