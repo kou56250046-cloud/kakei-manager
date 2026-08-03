@@ -5,9 +5,20 @@
 ## この構成の要点
 
 - **ローカル完結**。Firebase・Next.js・外部DB・外部AI APIは使わない。**依存パッケージはゼロ**
-- **データの正は `data/*.json`**（Git管理）。`dist/index.html` は生成物であり、いつ消してもよい
-- GitHub は**プライベートリポジトリでの保管・履歴管理のみ**に使う。**GitHub Pages は使わない**
-  （プライベートリポジトリからでも Pages は公開できるが、**サイトの中身は全世界から見える**ため）
+- **データの正は `data/*.json`**。ただし**Git管理しない**（`.gitignore` 済み）
+- `dist/index.html` は生成物であり、いつ消してもよい
+- GitHub は **public リポジトリ**。無料プランで Pages を使うには public である必要がある
+  （`docs/index.html` は AES-256-GCM で暗号化しているため、公開しても中身は読めない）
+
+### バックアップは `docs/index.html`
+
+`data/` をコミットしていないため、**リポジトリのファイル一覧はバックアップにならない**。
+代わりに `docs/index.html` に全データを暗号化して同梱しており、これが実質のバックアップ。
+`npm run restore` で `data/` 一式を戻せる（必要なのは合言葉だけ）。
+
+**そのため、`data/` に新しいファイルを足したら `build-web.js` の `backup` にも追加すること。**
+入れ忘れるとそのファイルだけ復元できなくなる（実際 `category_rules.json` と
+`recurring_incomes.json` が抜けており、後から追加した）。
 
 ## 絶対に守ること
 

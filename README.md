@@ -128,6 +128,7 @@ npm run build && npm run build:web
 | `npm run summary` | 集計をターミナルに表示（`-- 2026-05` で月指定） |
 | `npm run build` | `dist/index.html`（ローカル閲覧用・平文） |
 | `npm run build:web` | `docs/index.html`（Web公開用・**暗号化**） |
+| `npm run restore` | `docs/index.html` から `data/` を復元（`--force` で書き戻し） |
 | `npm run review -- --list` | 分類が未確定の取引を一覧 |
 | `npm run review -- --all` | 分類ルールを直した後、既存データに反映 |
 
@@ -144,11 +145,39 @@ GitHub Pages は**プライベートリポジトリからでも公開サイト�
 合言葉はリポジトリ直下の `.webpass`（`.gitignore` 済み）に置きます。
 変更するときは `.webpass` を書き換えて `npm run build:web` → commit → push。
 
-> **このリポジトリはバックアップにはなりません。** `data/` を除外しているため、
-> PCが壊れると取り込み済みのデータは失われます。`data/` は別途コピーしてください。
+ビルド時に**平文混入の自己点検**が走ります。暗号文を除いた残りに
+3桁区切りの数字・店名・金額が1つでも見つかると、ビルドが中断します。
 
 > `git add -f` などで `data/` を強制的に追加すると、家計データがそのまま公開されます。
 > public リポジトリであることに注意してください。
+
+## バックアップと復元
+
+`data/` は `.gitignore` していますが、**`docs/index.html` が実質のバックアップ**です。
+全データが AES-256-GCM で暗号化されて入っており、毎月コミットされます。
+
+### PCが壊れたときの復旧手順
+
+```bash
+git clone https://github.com/<user>/kakei-manager.git
+cd kakei-manager
+npm run restore -- --pass "合言葉" --force
+npm run build
+```
+
+これだけで `data/` 一式（取引・収入・口座・残高・固定費・**分類ルール**）が戻ります。
+必要なのは**合言葉だけ**です。
+
+### 確認だけしたいとき
+
+```bash
+npm run restore                      # 中身を表示するだけ。何も書かない
+npm run restore -- --out ./check     # 別の場所に出して、既存データと見比べる
+```
+
+`data/` に既存ファイルがある場合、`--force` なしでは上書きしません。
+
+> 復元後は JSON の整形（インデント）が変わりますが、内容は同一です。
 
 ## 構成
 

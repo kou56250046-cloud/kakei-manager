@@ -69,6 +69,13 @@ const data = {
   config: readJson(join(ROOT, 'config.json'), {}),
   today: new Date().toISOString().slice(0, 10),
   builtAt,
+  // 画面では使わないが、復元（npm run restore）のために同梱する。
+  // data/ は .gitignore されているため、ここに入れておかないと
+  // PCが壊れたときに分類ルール（蓄積した資産）が失われる。
+  backup: {
+    categoryRules: readJson(dataPath('category_rules.json'), null),
+    recurringIncomes: readJson(dataPath('recurring_incomes.json'), null),
+  },
   // ★ 見出しの副題も暗号化側に入れる。
   //   以前はこれを平文で埋め込んでいたため、合言葉なしで
   //   「取引N件・合計N円・生成日時」が読めてしまっていた。
