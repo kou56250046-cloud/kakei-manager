@@ -149,80 +149,142 @@
 <script>
 const PAYLOAD = /*__PAYLOAD__*/null;
 const APP_SRC = /*__APP_SRC__*/"";
-const SUBTITLE = /*__SUBTITLE__*/"";
-const STORE_KEY = 'kakei-pass';
 
 const b64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
 
-async function decrypt(passphrase) {
-  const enc = new TextEncoder();
-  const baseKey = await crypto.subtle.importKey('raw', enc.encode(passphrase), 'PBKDF2', false, ['deriveKey']);
-  const key = await crypto.subtle.deriveKey(
+/* ------------------------------------------------------------------ 鍵の保管
+ *
+ * ★ 合言葉そのものは保存しない。
+ *   GitHub Pages は https://<ユーザー名>.github.io という単一オリジンで、
+ *   そのアカウントの全リポジトリの Pages が localStorage を共有する。
+ *   合言葉を平文で置くと、別の Pages を1つ公開しただけでそこから読めてしまい、
+ *   合言葉を使い回していれば被害がこのアプリの外へ広がる。
+ *
+ *   代わりに、PBKDF2 で導出した鍵を extractable: false のまま IndexedDB に置く。
+ *   この鍵は「このブラウザでこのファイルを復号する」ことしかできず、
+ *   JS から鍵素材を取り出せない。ロック解除時に削除できる。
+ *   副次効果として、再訪時に PBKDF2 60万回を省けるので体感も速くなる。
+ */
+const DB_NAME = 'kakei', STORE = 'keys', KEY_ID = 'dek';
+
+function idb(mode, run) {
+  return new Promise((resolve, reject) => {
+    let req;
+    try { req = indexedDB.open(DB_NAME, 1); } catch (e) { return reject(e); }
+    req.onupgradeneeded = () => req.result.createObjectStore(STORE);
+    req.onerror = () => reject(req.error);
+    req.onsuccess = () => {
+      const db = req.result;
+      const tx = db.transaction(STORE, mode);
+      const out = run(tx.objectStore(STORE));
+      tx.oncomplete = () => { db.close(); resolve(out ? out.result : undefined); };
+      tx.onerror = () => { db.close(); reject(tx.error); };
+    };
+  });
+}
+const saveKey  = (k) => idb('readwrite', (os) => os.put(k, KEY_ID));
+const loadKey  = ()  => idb('readonly',  (os) => os.get(KEY_ID));
+const clearKey = ()  => idb('readwrite', (os) => os.delete(KEY_ID));
+
+async function deriveKey(passphrase) {
+  const baseKey = await crypto.subtle.importKey(
+    'raw', new TextEncoder().encode(passphrase), 'PBKDF2', false, ['deriveKey'],
+  );
+  return crypto.subtle.deriveKey(
     { name: 'PBKDF2', salt: b64(PAYLOAD.salt), iterations: PAYLOAD.iterations, hash: 'SHA-256' },
     baseKey,
     { name: 'AES-GCM', length: 256 },
-    false,
+    false,            // ★ extractable: false — 鍵素材を JS から取り出せない
     ['decrypt'],
   );
+}
+
+async function decryptWith(key) {
   const plain = await crypto.subtle.decrypt(
     { name: 'AES-GCM', iv: b64(PAYLOAD.iv) }, key, b64(PAYLOAD.data),
   );
   return new TextDecoder().decode(plain);
 }
 
-function boot(json) {
-  document.getElementById('gate').remove();
-  const app = document.getElementById('app');
-  app.hidden = false;
-  document.getElementById('page-sub').textContent = SUBTITLE;
-  // 復号したデータを DATA として注入し、ローカル版とまったく同じ描画コードを走らせる
-  const s = document.createElement('script');
-  s.textContent = 'const DATA = ' + json + ';\n' + APP_SRC;
-  document.body.appendChild(s);
-  document.getElementById('lock').addEventListener('click', () => {
-    try { localStorage.removeItem(STORE_KEY); } catch {}
-    location.reload();
-  });
-}
+/* ------------------------------------------------------------------ 起動 */
 
 const form = document.getElementById('gate-form');
 const err = document.getElementById('gate-err');
 const btn = document.getElementById('gate-btn');
 
-async function tryUnlock(pass, remember) {
-  btn.disabled = true;
-  err.textContent = '';
+/**
+ * 復号したデータで描画する。
+ * ★ gate は「描画が成功してから」消す。先に消すと、注入したスクリプトが
+ *   失敗したときに空の枠だけが残り、リロードしても保存鍵で自動復号 →
+ *   同じ場所で失敗、という白画面の無限ループになる。
+ */
+function boot(json) {
+  const app = document.getElementById('app');
+  const gate = document.getElementById('gate');
+  app.hidden = false;
   try {
-    const json = await decrypt(pass);
-    if (remember) { try { localStorage.setItem(STORE_KEY, pass); } catch {} }
-    boot(json);
-    return true;
-  } catch {
+    const s = document.createElement('script');
+    // sourceURL を付けないと、巨大な DATA の行に全エラーが潰れて原因が追えない
+    s.textContent = 'const DATA = ' + json + ';\n' + APP_SRC + '\n//# sourceURL=kakei-app.js';
+    document.body.appendChild(s);
+    if (!window.__kakeiRendered) throw new Error('描画処理が完了しませんでした');
+
+    // 注入側は `const DATA = ...`。classic script の top-level const は
+    // グローバル**レキシカル**環境に入るため window のプロパティにはならない。
+    // window.DATA ではなく、素の DATA を参照する。
+    const sub = (typeof DATA !== 'undefined' && DATA && DATA.subtitle) || '';
+    if (sub) document.getElementById('page-sub').textContent = sub;
+
+    gate.remove();
+    document.getElementById('lock').addEventListener('click', async () => {
+      try { await clearKey(); } catch {}
+      location.reload();
+    });
+  } catch (e) {
+    app.hidden = true;
+    err.textContent = '表示に失敗しました: ' + (e && e.message ? e.message : e);
     btn.disabled = false;
-    return false;
+    btn.textContent = '開く';
+    throw e;
   }
+}
+
+async function unlockWithKey(key, remember) {
+  const json = await decryptWith(key);       // 合言葉が違えば AES-GCM がここで失敗する
+  if (remember) { try { await saveKey(key); } catch {} }
+  boot(json);
 }
 
 form.addEventListener('submit', async (e) => {
   e.preventDefault();
   const pass = document.getElementById('pass').value;
   if (!pass) return;
+  btn.disabled = true;
   btn.textContent = '復号中…';
-  const ok = await tryUnlock(pass, document.getElementById('remember').checked);
-  if (!ok) {
+  err.textContent = '';
+  try {
+    const key = await deriveKey(pass);
+    await unlockWithKey(key, document.getElementById('remember').checked);
+  } catch {
+    btn.disabled = false;
     btn.textContent = '開く';
     err.textContent = '合言葉が違います。';
     document.getElementById('pass').select();
   }
 });
 
-// 記憶済みなら自動で開く
+// 鍵が保存済みなら自動で開く。
+// ※ 合言葉を変えた場合は復号に失敗するので、鍵を捨てて通常の入力に戻す。
 (async () => {
-  let saved = null;
-  try { saved = localStorage.getItem(STORE_KEY); } catch {}
-  if (saved) {
-    const ok = await tryUnlock(saved, true);
-    if (!ok) { try { localStorage.removeItem(STORE_KEY); } catch {} }
+  let key = null;
+  try { key = await loadKey(); } catch {}
+  if (!key) return;
+  try {
+    await unlockWithKey(key, false);
+  } catch {
+    try { await clearKey(); } catch {}
+    btn.disabled = false;
+    btn.textContent = '開く';
   }
 })();
 

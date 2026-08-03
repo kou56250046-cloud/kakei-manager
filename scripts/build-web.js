@@ -53,6 +53,11 @@ if (passphrase.length < 10) {
 // --- データ収集（ローカル版 build.js と同じ） --------------------------------
 
 const transactions = readAllTransactions();
+
+const months = [...new Set(transactions.map((t) => t.date.slice(0, 7)))].sort();
+const total = transactions.reduce((a, t) => a + t.amount, 0);
+const builtAt = new Date().toLocaleString('ja-JP');
+
 const data = {
   transactions,
   incomes: readJson(dataPath('incomes.json'), []),
@@ -63,13 +68,33 @@ const data = {
   importLog: readJson(dataPath('import_log.json'), []),
   config: readJson(join(ROOT, 'config.json'), {}),
   today: new Date().toISOString().slice(0, 10),
-  builtAt: new Date().toLocaleString('ja-JP'),
+  builtAt,
+  // ★ 見出しの副題も暗号化側に入れる。
+  //   以前はこれを平文で埋め込んでいたため、合言葉なしで
+  //   「取引N件・合計N円・生成日時」が読めてしまっていた。
+  subtitle: transactions.length
+    ? `${months[0]} 〜 ${months[months.length - 1]}　取引 ${transactions.length}件　合計 ${yen(total)}　生成 ${builtAt}`
+    : `データ未取込　生成 ${builtAt}`,
 };
 
 // --- 暗号化 -----------------------------------------------------------------
 
 const enc = new TextEncoder();
-const salt = crypto.getRandomValues(new Uint8Array(16));
+
+// salt はビルドごとに変えず、`.websalt` に保存して再利用する。
+// 毎回変えると、ブラウザに保存した復号鍵が更新のたびに無効になり、
+// 毎月合言葉を入れ直すことになるため。
+// （IV は毎回新しく生成する。AES-GCM で危険なのは IV の再利用であって salt の再利用ではない）
+const saltFile = join(ROOT, '.websalt');
+let salt;
+if (existsSync(saltFile)) {
+  salt = new Uint8Array(Buffer.from(readFileSync(saltFile, 'utf8').trim(), 'base64'));
+  if (salt.length !== 16) salt = crypto.getRandomValues(new Uint8Array(16));
+} else {
+  salt = crypto.getRandomValues(new Uint8Array(16));
+}
+writeFileSync(saltFile, Buffer.from(salt).toString('base64') + '\n', 'utf8');
+
 const iv = crypto.getRandomValues(new Uint8Array(12));
 
 const baseKey = await crypto.subtle.importKey('raw', enc.encode(passphrase), 'PBKDF2', false, ['deriveKey']);
@@ -101,37 +126,58 @@ const style = readFileSync(join(UI, 'style.css'), 'utf8');
 const summary = readFileSync(join(UI, 'summary.js'), 'utf8').replace(/^export\s+/gm, '');
 const app = readFileSync(join(UI, 'app.js'), 'utf8');
 
-const months = [...new Set(transactions.map((t) => t.date.slice(0, 7)))].sort();
-const total = transactions.reduce((a, t) => a + t.amount, 0);
-const subtitle = transactions.length
-  ? `${months[0]} 〜 ${months[months.length - 1]}　取引 ${transactions.length}件　合計 ${yen(total)}　生成 ${data.builtAt}`
-  : `データ未取込　生成 ${data.builtAt}`;
-
 // 描画コードは文字列として埋め込み、復号後に <script> として注入する。
 // こうするとローカル版（dist/index.html）と完全に同じ app.js をそのまま使える。
 const html = template
   .replace('/*__STYLE__*/', () => style)
   .replace('/*__PAYLOAD__*/null', () => JSON.stringify(payload))
-  .replace('/*__APP_SRC__*/""', () => JSON.stringify(summary + '\n' + app))
-  .replace('/*__SUBTITLE__*/""', () => JSON.stringify(subtitle));
+  .replace('/*__APP_SRC__*/""', () => JSON.stringify(summary + '\n' + app));
 
 const OUT_DIR = join(ROOT, 'docs');
 mkdirSync(OUT_DIR, { recursive: true });
 writeFileSync(join(OUT_DIR, 'index.html'), html, 'utf8');
 writeFileSync(join(OUT_DIR, '.nojekyll'), '', 'utf8');
 
-// 平文が混入していないかの自己点検（コミット前の最後の砦）
-const leakChecks = [
-  ['店名', transactions.find((t) => t.merchant)?.merchant],
-  ['手取り額', String(data.incomes[0]?.net_amount ?? '')],
-  ['口座残高', String(data.balances[0]?.actual_balance ?? '')],
-];
-const leaks = leakChecks.filter(([, needle]) => needle && needle.length >= 3 && html.includes(needle));
+/**
+ * 平文が混入していないかの自己点検（コミット前の最後の砦）。
+ *
+ * 以前は「店名1件・手取り額1件・口座残高1件」だけを見ており、
+ * 自分が埋め込んだ subtitle（合計金額を含む）を検査対象から外していた。
+ * そのため穴を自分で開けて自分で見逃していた。
+ * ここでは暗号文を取り除いた残り全体を、機械的に総当たりする。
+ */
+const scrubbed = html
+  .replace(payload.data, '')
+  .replace(payload.salt, '')
+  .replace(payload.iv, '');
+
+const leaks = [];
+
+// ① 3桁区切りの数字（金額の形をしたもの）が1つでも残っていたらアウト
+for (const m of new Set(scrubbed.match(/\d{1,3}(,\d{3})+/g) ?? [])) {
+  leaks.push(['金額らしき数字', m]);
+}
+
+// ② 店名（表示名・原文とも）
+const merchants = new Set();
+for (const t of transactions) {
+  for (const v of [t.merchant, t.merchant_raw]) if (v && v.length >= 3) merchants.add(v);
+}
+for (const m of merchants) if (scrubbed.includes(m)) leaks.push(['店名', m]);
+
+// ③ 収入・残高・固定費の金額（区切りなしの生の数字）
+const amounts = new Set();
+for (const i of data.incomes) for (const v of [i.net_amount, i.gross_amount]) if (v) amounts.add(String(v));
+for (const b of data.balances) if (b.actual_balance) amounts.add(String(b.actual_balance));
+for (const f of data.fixedCosts) if (f.amount) amounts.add(String(f.amount));
+for (const e of data.importLog) if (e.billed) amounts.add(String(e.billed));
+amounts.add(String(total));
+for (const a of amounts) if (a.length >= 4 && scrubbed.includes(a)) leaks.push(['金額', a]);
 
 console.log('');
 console.log(`  docs/index.html を生成しました（${(Buffer.byteLength(html) / 1024).toFixed(0)} KB）`);
 console.log(`  暗号化: ${payload.alg} / PBKDF2 ${ITERATIONS.toLocaleString()}回`);
-console.log(`  ${subtitle}`);
+console.log(`  ${data.subtitle}（この行は暗号化側に入っており、公開HTMLには出ません）`);
 if (leaks.length > 0) {
   console.error(`\n  ✖ 平文が混入しています: ${leaks.map(([n]) => n).join(', ')} — コミットしないでください\n`);
   process.exit(1);

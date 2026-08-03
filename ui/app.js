@@ -650,3 +650,7 @@ function initControls() {
 
 initControls();
 render();
+
+// Web版（暗号化）の boot() が「描画まで到達したか」を判定するための目印。
+// これが立たないまま復号ゲートを閉じると、空の枠だけが残って復帰不能になる。
+window.__kakeiRendered = true;

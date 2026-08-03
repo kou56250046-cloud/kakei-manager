@@ -16,6 +16,9 @@ data/
 # GitHub Pages 用ダッシュボードの合言葉。絶対にコミットしない
 .webpass
 
+# 鍵導出のsalt。ビルド間で同じ鍵になるよう保持する（コミットはしない）
+.websalt
+
 # 秘密情報
 .env
 .env.local
