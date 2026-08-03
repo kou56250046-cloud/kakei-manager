@@ -266,9 +266,11 @@ function renderHero() {
     el('div', { class: 'tiles' }, [
       tile('取引件数', String(rows.length), '件'),
       tile('手取り収入', yenFmt(income), '円', state.month ? '給与明細より' : `${incomeMonths}ヶ月分`),
+      // 収支は「プラスが良い」。支出の前月比（増＝赤）とは向きが逆なので注意
       income > 0
         ? tile('収支', yenFmt(income - total), '円',
-            (income - total >= 0 ? '黒字' : '赤字') + (incompleteIncluded ? '（不完全な月を含む）' : ''))
+            (income - total >= 0 ? '黒字' : '赤字') + (incompleteIncluded ? '（不完全な月を含む）' : ''),
+            income - total >= 0 ? 'good' : 'bad')
         : tile('収支', '—', '', '収入データなし'),
       t ? tile('累積未献金', yenFmt(t.carryOver), '円', `${t.month} 時点`) : tile('累積未献金', '—', '', '収入データなし'),
       tile('要確認', String(reviews.length), '件', reviews.length === 0 ? 'なし' : '分類が未確定'),
@@ -286,11 +288,18 @@ function renderHero() {
 
 let lastHeroTotal = null;
 
-function tile(label, value, unit, sub) {
+/**
+ * @param {'good'|'bad'|null} tone 値を着色する。色だけに意味を持たせないよう、
+ *   sub の「黒字 / 赤字」という文字は必ず併記したまま残すこと
+ */
+function tile(label, value, unit, sub, tone) {
   return el('div', { class: 'tile' }, [
     el('div', { class: 'tile-label', text: label }),
-    el('div', { class: 'tile-value', html: value + (unit ? `<span class="unit">${unit}</span>` : '') }),
-    sub ? el('div', { class: 'tile-sub', text: sub }) : null,
+    el('div', {
+      class: 'tile-value' + (tone ? ` is-${tone}` : ''),
+      html: value + (unit ? `<span class="unit">${unit}</span>` : ''),
+    }),
+    sub ? el('div', { class: 'tile-sub' + (tone ? ` is-${tone}` : ''), text: sub }) : null,
   ]);
 }
 
@@ -885,6 +894,12 @@ function initControls() {
     const y = b.top + b.height / 2;
     const r = Math.hypot(Math.max(x, innerWidth - x), Math.max(y, innerHeight - y));
     const vt = document.startViewTransition(() => apply(next));
+    // View Transition のコールバックは描画機会に紐づくため、
+    // 描画が絞られている状況（バックグラウンド等）では遅れることがある。
+    // テーマの切り替え自体が演出の完了に依存してはいけないので保険を置く
+    setTimeout(() => {
+      if (document.documentElement.getAttribute('data-theme') !== next) apply(next);
+    }, 600);
     vt.ready.then(() => {
       document.documentElement.animate(
         { clipPath: [`circle(0px at ${x}px ${y}px)`, `circle(${r}px at ${x}px ${y}px)`] },

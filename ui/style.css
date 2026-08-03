@@ -213,6 +213,12 @@ html.js-motion .card.is-in {
 .tile { min-width: 0; }
 .tile-label { color: var(--muted); font-size: 11.5px; }
 .tile-value { font-size: 21px; font-weight: 620; line-height: 1.25; font-variant-numeric: tabular-nums; }
+/* 収支は「プラスが良い」。--good-text / --critical はどちらも両モードで
+   AA（4.5:1）を満たす色。色だけで伝えないよう「黒字/赤字」の文字も併記する */
+.tile-value.is-good { color: var(--good-text); }
+.tile-value.is-bad { color: var(--critical); }
+.tile-sub.is-good { color: var(--good-text); }
+.tile-sub.is-bad { color: var(--critical); }
 .tile-value .unit { font-size: 12px; font-weight: 500; color: var(--ink-2); margin-left: 2px; }
 .tile-sub { color: var(--muted); font-size: 11.5px; }
 
