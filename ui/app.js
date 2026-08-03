@@ -31,6 +31,7 @@ const state = {
   search: '',
   category: '',
   sort: { key: 'date', dir: 'desc' },
+  txLimit: 200,        // 「残りN件を表示」で解除する
 };
 
 // ------------------------------------------------------------------ motion
@@ -114,10 +115,23 @@ function hideTip() { tip.classList.remove('is-on'); }
 
 // ------------------------------------------------------------------ 派生データ
 
+/**
+ * ★ 引落・残高の判定は「ビルド時刻」ではなく「開いた瞬間の実日付」で行う。
+ *
+ * DATA.today はビルド時に焼き込まれた日付。これを基準にすると、
+ * 更新前に前月の dist/index.html を開いたときに
+ * 「本日 N円の引落に対し残高不足」という**とっくに終わった警告**が出続ける。
+ * 月1運用では「まず古いファイルを開く」が普通に起き、
+ * 画面で最も強い警告が最も起きやすい状況で偽になっていた。
+ */
+const REAL_TODAY = new Date().toISOString().slice(0, 10);
+const STALE_DAYS = Math.max(0, Math.round((Date.parse(REAL_TODAY) - Date.parse(DATA.today)) / 86400000));
+const IS_STALE = STALE_DAYS > 0;
+
 const months = markIncompleteMonths(monthlyTotals(TX), DATA.importLog, DATA.config?.analysis?.start_month);
 const titheRows = titheByMonth(DATA.incomes, DATA.tithe, DATA.config, TX);
-const payments = upcomingPayments(DATA.importLog, DATA.today);
-const risk = settlementRisk(DATA.accounts, DATA.balances, DATA.importLog, DATA.today);
+const payments = upcomingPayments(DATA.importLog, REAL_TODAY);
+const risk = settlementRisk(DATA.accounts, DATA.balances, DATA.importLog, REAL_TODAY);
 const reviews = reviewQueue(TX);
 const mismatches = (DATA.importLog ?? []).filter((e) => e.status === 'MISMATCH');
 
@@ -136,38 +150,77 @@ function selectMonth(month) {
   swapCards(render);
 }
 
+/**
+ * 1枚のカードで例外が出ても、他のカードを巻き添えにしない。
+ * 以前は12個を素で連続呼び出ししており、データ1件の不整合
+ * （不正な正規表現、date 欠損など）で画面全体が消え、
+ * Web版では「表示に失敗しました」でダッシュボードごと開けなくなった。
+ */
+function safe(label, fn, hostSel) {
+  try {
+    fn();
+  } catch (e) {
+    console.error(`[${label}] 描画に失敗:`, e);
+    const host = hostSel ? $(hostSel) : null;
+    if (host) {
+      host.replaceChildren(el('div', {
+        class: 'empty',
+        text: `${label} の表示に失敗しました（他の項目は正常です）`,
+      }));
+    }
+  }
+}
+
 function render() {
-  renderBanner();
-  renderFilterBar();
-  renderHero();
-  renderTrend();
-  renderCategories();
-  renderFixedSplit();
-  renderTithe();
-  renderFixedList();
-  renderReview();
-  renderMerchants();
-  renderAccounts();
-  renderPayments();
-  renderTable();
+  safe('警告', renderBanner, '#banners');
+  safe('期間フィルタ', renderFilterBar, '#filters');
+  safe('サマリー', renderHero, '#hero');
+  safe('月次推移', renderTrend, '#trend');
+  safe('カテゴリ別支出', renderCategories, '#categories');
+  safe('固定費と変動費', renderFixedSplit, '#fixedsplit');
+  safe('献金', renderTithe, '#tithe');
+  safe('固定費一覧', renderFixedList, '#fixedlist');
+  safe('要確認キュー', renderReview, '#review');
+  safe('店舗別', renderMerchants, '#merchants');
+  safe('口座残高', renderAccounts, '#accounts');
+  safe('カード引落予定', renderPayments, '#payments');
+  safe('取引一覧', renderTable, '#txtable');
 }
 
 function renderBanner() {
   const host = $('#banners');
   host.replaceChildren();
 
+  // データが古いことを最初に知らせる。これを出さずに引落や残高を判定すると、
+  // 「とっくに終わった引落」を今日の予定として警告してしまう
+  if (IS_STALE) {
+    host.appendChild(el('div', { class: 'banner' }, [
+      el('span', { class: 'banner-icon', text: '⏳' }),
+      el('div', {
+        class: 'banner-body',
+        html: `<strong>この画面は ${esc(DATA.today)} 時点のデータです</strong>`
+          + `（今日は ${esc(REAL_TODAY)}／${STALE_DAYS}日前の内容）。`
+          + ` 引落・残高の判定は古い可能性があります。<code>npm run update</code> で更新してください。`,
+      }),
+    ]));
+  }
+
   // 残高不足は延滞・手数料という実損に直結する。この画面で最も優先度が高い警告
   if (risk && !risk.covered) {
-    const when = risk.daysLeft <= 0 ? '本日' : `${risk.daysLeft}日後（${risk.date}）`;
+    // データが古いときは「本日」「N日後」と断言しない（その相対表現こそが嘘になる）
+    const when = IS_STALE
+      ? `${risk.date} 予定の`
+      : (risk.daysLeft <= 0 ? '本日' : `${risk.daysLeft}日後（${risk.date}）`) + 'に';
     host.appendChild(el('div', { class: 'banner is-critical' }, [
       el('span', { class: 'banner-icon', text: '⚠' }),
       el('div', {
         class: 'banner-body',
-        html: `<strong>引落に残高が足りません</strong>：${when}に <strong>${yenFmt(risk.amount)}円</strong> の引落予定に対し、`
+        html: `<strong>引落に残高が足りません</strong>：${when} <strong>${yenFmt(risk.amount)}円</strong> の引落に対し、`
           + `${esc(risk.account.name)}の残高は ${yenFmt(risk.balance)}円（${esc(risk.balanceDate)}時点）。`
           + `<strong>${yenFmt(risk.shortfall)}円 不足</strong>しています。`
+          + '　→ 最新の残高を <code>data/balances.json</code> に追記して <code>npm run update</code>。'
           + (risk.sameDay
-            ? '　※ 残高の基準日と引落日が同じため、既に引き落とし済みの残高を見ている可能性があります。'
+            ? '（残高の基準日と引落日が同じため、引き落とし後の残高を見ている可能性があります）'
             : ''),
       }),
     ]));
@@ -273,7 +326,8 @@ function renderHero() {
             income - total >= 0 ? 'good' : 'bad')
         : tile('収支', '—', '', '収入データなし'),
       t ? tile('累積未献金', yenFmt(t.carryOver), '円', `${t.month} 時点`) : tile('累積未献金', '—', '', '収入データなし'),
-      tile('要確認', String(reviews.length), '件', reviews.length === 0 ? 'なし' : '分類が未確定'),
+      // ★ この1つだけ全期間スコープ。他4つと違うので必ず明示する
+      tile('要確認', String(reviews.length), '件', reviews.length === 0 ? '全期間・なし' : '全期間・分類が未確定'),
     ].filter(Boolean)),
   );
 
@@ -319,7 +373,7 @@ function renderTrend() {
   svg.appendChild(el('defs', {}, [
     el('pattern', { id: 'hatch', width: 6, height: 6, patternTransform: 'rotate(45)', patternUnits: 'userSpaceOnUse' }, [
       el('rect', { width: 6, height: 6, fill: 'var(--surface)' }),
-      el('line', { x1: 0, y1: 0, x2: 0, y2: 6, stroke: 'var(--baseline)', 'stroke-width': 3 }),
+      el('line', { x1: 0, y1: 0, x2: 0, y2: 6, stroke: 'var(--warning-line)', 'stroke-width': 3, opacity: 0.55 }),
     ]),
   ]));
 
@@ -356,7 +410,7 @@ function renderTrend() {
       text: m.month.slice(5) + '月', fill: selected ? 'var(--ink)' : undefined,
     }));
     if (m.incomplete) {
-      svg.appendChild(el('text', { x: padL + band * i + band / 2, y: padT + innerH + 32, 'text-anchor': 'middle', 'font-size': 10, text: '不完全' }));
+      svg.appendChild(el('text', { x: padL + band * i + band / 2, y: padT + innerH + 32, 'text-anchor': 'middle', 'font-size': 10, fill: 'var(--warning-line)', 'font-weight': 600, text: '不完全' }));
     }
 
     const hit = el('rect', {
@@ -461,6 +515,7 @@ function renderCategories() {
 /** 固定費と変動費（2系列＝凡例必須） */
 function renderFixedSplit() {
   const host = $('#fixedsplit');
+  $('#split-note').textContent = scopeLabel();
   const fv = fixedVsVariable(TX, state.month);
   host.replaceChildren();
   if (fv.total <= 0) { host.appendChild(el('div', { class: 'empty', text: 'データがありません' })); return; }
@@ -595,7 +650,13 @@ function renderFixedList() {
       class: 'num',
       text: f.amount_type === 'computed' ? '毎月計算' : f.amount === null ? '—' : yenFmt(f.amount),
     }),
-    el('td', { class: 'num strong', text: f.actualAvg === null ? '—' : yenFmt(f.actualAvg) }),
+    el('td', { class: 'num strong' }, [
+      el('span', { text: f.actualAvg === null ? '—' : yenFmt(f.actualAvg) }),
+      // 登録額と実績の乖離。サブスクの値上げや料金改定は、
+      // 気づかないまま何年も払い続けるのが一番損なので、数字が揃っている以上は出す
+      f.drift ? el('span', { class: 'drift ' + (f.drift.up ? 'is-up' : 'is-down'),
+        text: (f.drift.up ? ' ▲+' : ' ▼−') + yenFmt(Math.abs(f.drift.diff)) }) : null,
+    ].filter(Boolean)),
     el('td', { class: 'num', text: f.monthsSeen === 0 ? '—' : `${f.monthsSeen}ヶ月` }),
     el('td', { class: 'num', text: f.actualTotal === 0 ? '—' : yenFmt(f.actualTotal) }),
     el('td', {}, [
@@ -805,6 +866,7 @@ function renderPayments() {
 
 function renderTable() {
   const host = $('#txtable');
+  $('#tx-note').textContent = `${scopeLabel()}／見出しをクリックで並べ替え`;
   const q = state.search.trim().toLowerCase();
   let rows = scoped().filter((t) => {
     if (state.category && t.category !== state.category) return false;
@@ -831,7 +893,10 @@ function renderTable() {
     },
   }, [label, key === k ? el('span', { class: 'arrow', text: dir === 'asc' ? '▲' : '▼' }) : null]);
 
-  const body = rows.slice(0, 400).map((t) => el('tr', {}, [
+  // 表示件数。既に456件あり、固定400件では56件が到達不能になっていた。
+  // DOM量を抑えつつ、押せば必ず全件に到達できるようにする
+  const limit = state.txLimit;
+  const body = rows.slice(0, limit).map((t) => el('tr', {}, [
     el('td', { text: t.date }),
     el('td', { class: 'strong', text: t.merchant, title: t.merchant_raw }),
     el('td', {}, [
@@ -858,10 +923,16 @@ function renderTable() {
         el('tbody', {}, body),
       ]),
     ]),
-    el('div', {
-      class: 'rowcount',
-      text: `${rows.length}件 / 合計 ${yenFmt(sum)}円` + (rows.length > 400 ? '（先頭400件を表示）' : ''),
-    }),
+    el('div', { class: 'rowcount' }, [
+      el('span', { text: `${scopeLabel()}｜${rows.length}件 / 合計 ${yenFmt(sum)}円` }),
+      rows.length > limit
+        ? el('button', {
+            class: 'more-btn', type: 'button',
+            text: `残り ${rows.length - limit}件を表示`,
+            onclick: () => { state.txLimit = rows.length; renderTable(); },
+          })
+        : null,
+    ].filter(Boolean)),
   );
 }
 

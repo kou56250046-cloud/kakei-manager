@@ -337,8 +337,20 @@ export function fixedCostList(fixedCosts, transactions, months) {
     }
     const actualTotal = items.reduce((a, t) => a + t.amount, 0);
     const monthsSeen = new Set(items.map((t) => t.date.slice(0, 7))).size;
+    const avg = monthsSeen > 0 ? Math.round(actualTotal / monthsSeen) : null;
+
+    // 登録額と実績平均の乖離。±10%を超えたら料金改定の可能性がある。
+    // 値上げは気づかないまま何年も払い続けるのが最も損なので、明示的に出す。
+    // 変動費（電気・ガス）は季節変動があるため、乖離が出ても即異常ではない点に注意。
+    let drift = null;
+    if (fc.amount && avg !== null && monthsSeen >= 2) {
+      const diff = avg - fc.amount;
+      if (Math.abs(diff) / fc.amount > 0.1) drift = { diff, up: diff > 0, pct: diff / fc.amount };
+    }
+
     return {
       ...fc,
+      drift,
       generated: fc.auto_generate === true,
       count: items.length,
       monthsSeen,

@@ -30,7 +30,7 @@
     <section class="card">
       <div class="card-head">
         <h2 class="card-title">月次支出の推移</h2>
-        <span class="card-note">利用日ベース／棒をクリックすると期間を切り替えます</span>
+        <span class="card-note">全期間（フィルタ非追随）／棒をクリックで期間切替</span>
       </div>
       <div id="trend"></div>
     </section>
@@ -46,6 +46,7 @@
     <section class="card span-4">
       <div class="card-head">
         <h2 class="card-title">固定費と変動費</h2>
+        <span class="card-note" id="split-note"></span>
       </div>
       <div id="fixedsplit"></div>
     </section>
@@ -101,7 +102,7 @@
     <section class="card">
       <div class="card-head">
         <h2 class="card-title">取引一覧</h2>
-        <span class="card-note">見出しをクリックで並べ替え</span>
+        <span class="card-note" id="tx-note"></span>
       </div>
       <div class="controls">
         <input class="input" id="f-search" type="search" placeholder="店名・備考で検索" autocomplete="off">
@@ -113,7 +114,7 @@
   </div>
 </div>
 
-<div id="tip" role="status" aria-live="polite"></div>
+<div id="tip" aria-hidden="true"></div>
 
 <script>const DATA = /*__DATA__*/null;</script>
 <!-- type="module" は使わない。file:// で開いたときにモジュール扱いで弾かれる環境を避けるため、
