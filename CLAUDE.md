@@ -34,6 +34,10 @@
 ## コマンド
 
 ```bash
+npm run close            # ★月次の締め。対話で分類と残高を確定し、以下を全部通す
+npm run close -- --commit  # git commit まで
+npm run close -- --yes     # 対話なし
+
 npm run import           # imports/*.csv → data/transactions/YYYY-MM.json
 npm run import:payslip   # 給与明細/*.pdf → data/incomes.json
 npm run generate         # 固定費マスタ・定期収入マスタ → 月次の取引・収入を生成
