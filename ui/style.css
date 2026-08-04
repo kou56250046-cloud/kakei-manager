@@ -100,6 +100,36 @@
 
 * { box-sizing: border-box; }
 
+/* ------------------------------------------------------- 今月の色（作品層）
+ *
+ * その月のデータから色相を決め、ページの地の色だけを変える。
+ * 同じデータなら必ず同じ色になる（乱数を使わない）ので、
+ * 「あの赤かった月」が記憶の索引になる。
+ *
+ * ★ 系列色（--series-*）は絶対に変えない。月ごとに変えると月間比較が壊れる。
+ * ★ カードの中は不透明な --surface のまま。文字のコントラストに触れさせない。
+ */
+body::before {
+  content: ''; position: fixed; inset: 0; z-index: -2; pointer-events: none;
+  background:
+    /* 上から差す光。奥行きを作る */
+    radial-gradient(150% 100% at 50% -5%,
+      hsl(var(--month-h, 208) var(--month-s, 20%) 50% / var(--month-a, .05)) 0%,
+      transparent 70%),
+    /* 画面全体の地の色。端まで届かせないと月ごとの差が知覚できない */
+    hsl(var(--month-h, 208) var(--month-s, 20%) 50% / var(--month-a2, .03));
+  transition: background var(--dur-state) linear;
+}
+
+/* 微細な粒状ノイズ。静的な1枚なので描画コストは初回のみ。
+   ★ カウントアップ中の数字には絶対に掛けない（毎フレーム再フィルタになる） */
+body::after {
+  content: ''; position: fixed; inset: 0; z-index: -1; pointer-events: none;
+  opacity: .028;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+:root[data-theme="dark"] body::after { opacity: .045; }
+
 body {
   margin: 0;
   background: var(--plane);
@@ -152,7 +182,21 @@ body {
   border-radius: 999px; padding: 5px 13px; font: inherit; font-size: 12.5px; cursor: pointer;
   font-variant-numeric: tabular-nums; white-space: nowrap;
 }
+/* この画面の主操作なのに、押した手応えが一切返ってこなかった。
+   transform / color 系だけを動かすのでコンポジタで完結する */
+.chip, .theme-toggle {
+  transition: color var(--dur-micro) var(--e-state),
+              background-color var(--dur-micro) var(--e-state),
+              border-color var(--dur-micro) var(--e-state),
+              transform var(--dur-micro) var(--e-state);
+}
 .chip:hover { color: var(--ink); border-color: var(--baseline); }
+.chip:active, .theme-toggle:active { transform: translate3d(0, 1px, 0); }
+/* ★ outline を消さない。現状フォーカスリングはブラウザ既定に頼っているので、
+   リセットするとキーボード操作が全滅する。明示して見やすくするだけにとどめる */
+:where(.chip, .theme-toggle, .more-btn, .foldable > summary):focus-visible {
+  outline: 2px solid var(--series-1); outline-offset: 2px; border-radius: 8px;
+}
 .chip[aria-pressed="true"] {
   background: var(--ink); color: var(--surface); border-color: var(--ink);
 }
@@ -199,16 +243,28 @@ html.js-motion .card.is-in {
 
 /* ---------------------------------------------------------------- figures */
 
-.hero-row { display: flex; flex-wrap: wrap; gap: 28px 40px; align-items: flex-end; }
-.hero { min-width: 0; }
+/* 主役を tile と同じ行に並べない。以前は5つのタイルと同列で、
+   「一番大きい数字」であって「主役」には見えていなかった */
+.hero-row { display: block; }
+.hero { min-width: 0; padding-bottom: 18px; margin-bottom: 18px; border-bottom: 1px solid var(--border); }
 .hero-label { color: var(--muted); font-size: 12px; }
+
 /* tabular-nums はカウントアップの前提。プロポーショナル数字のままだと
    桁が変わるたびに幅が動いて震えて見える */
 .hero-value {
-  font-size: 48px; font-weight: 640; line-height: 1.1; letter-spacing: -.02em;
+  font-size: clamp(52px, 6.4vw, 92px);
+  font-weight: 700; line-height: 1.05; letter-spacing: -.03em;
   font-variant-numeric: tabular-nums;
 }
-.hero-value .unit { font-size: 20px; font-weight: 500; color: var(--ink-2); margin-left: 4px; letter-spacing: 0; }
+.hero-value .unit {
+  font-size: .32em; font-weight: 500; color: var(--ink-2);
+  margin-left: 6px; letter-spacing: 0;
+}
+
+/* 月を切り替えたとき、数字が下から起き上がる（カウントアップと同時進行） */
+.hero-value-clip { overflow: hidden; }
+.hero-value { transition: transform 300ms var(--e-figure), opacity 300ms var(--e-figure); }
+.hero-value.is-rise { transform: translate3d(0, .22em, 0); opacity: .25; }
 .hero-delta { font-size: 12.5px; color: var(--ink-2); margin-top: 2px; }
 .hero-delta .up { color: var(--critical); }
 .hero-delta .down { color: var(--good-text); }

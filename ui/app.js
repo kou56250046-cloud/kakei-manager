@@ -172,6 +172,7 @@ function safe(label, fn, hostSel) {
 }
 
 function render() {
+  safe('今月の色', applyMonthTone);
   safe('警告', renderBanner, '#banners');
   safe('期間フィルタ', renderFilterBar, '#filters');
   safe('サマリー', renderHero, '#hero');
@@ -307,8 +308,10 @@ function renderHero() {
 
   $('#hero').replaceChildren(
     el('div', { class: 'hero' }, [
-      el('div', { class: 'hero-label', text: label }),
-      heroValue,
+      // ★ 数字を大きくするなら、何の数字かを同じ視界に残す。
+      //   これが無いと1年後に「その月に口座から出た額」と誤読する
+      el('div', { class: 'hero-label', text: `${label}（利用日ベース・カード明細＋固定費）` }),
+      el('div', { class: 'hero-value-clip' }, [heroValue]),
       delta
         ? el('div', {
             class: 'hero-delta',
@@ -337,6 +340,14 @@ function renderHero() {
   const diffRatio = total === 0 ? 0 : Math.abs(total - from) / Math.abs(total);
   countTo(heroValue, from, total, diffRatio < 0.05 ? 0 : (firstPaint ? 900 : 420),
     '<span class="unit">円</span>');
+
+  // 月を切り替えたとき、数字が下から起き上がる。カウントアップと同時に走らせて
+  // 「別の数字に差し替わった」ではなく「新しい数字が据えられた」と感じさせる
+  if (!REDUCE && !firstPaint) {
+    heroValue.classList.add('is-rise');
+    requestAnimationFrame(() => requestAnimationFrame(() => heroValue.classList.remove('is-rise')));
+    setTimeout(() => heroValue.classList.remove('is-rise'), 500);   // rAF が来なくても必ず戻す
+  }
   lastHeroTotal = total;
 }
 
@@ -367,7 +378,7 @@ function renderTrend() {
   const innerW = W - padL - padR, innerH = H - padT - padB;
   const max = Math.max(...months.map((m) => m.amount), 1);
   const band = innerW / months.length;
-  const barW = Math.min(24, band * 0.5);
+  const baseW = Math.min(24, band * 0.5);
 
   const svg = el('svg', { class: 'chart', viewBox: `0 0 ${W} ${H}`, preserveAspectRatio: 'xMidYMid meet', role: 'img' });
   svg.appendChild(el('defs', {}, [
@@ -379,15 +390,23 @@ function renderTrend() {
 
   months.forEach((m, i) => {
     const h = Math.max(2, (m.amount / max) * innerH);
+    const selected = state.month === m.month;
+    // 選択月は太く（手前）、それ以外は細く（奥）。band の中で変えるので隣と衝突しない
+    const barW = state.month === null ? baseW
+      : Math.min(band * 0.62, selected ? baseW * 1.34 : baseW * 0.82);
     const x = padL + band * i + (band - barW) / 2;
     const y = padT + innerH - h;
-    const selected = state.month === m.month;
 
     // 4px の角丸データ端・ベースライン側は角なし
     const r = Math.min(4, h);
     const d = `M${x},${padT + innerH} L${x},${y + r} Q${x},${y} ${x + r},${y} L${x + barW - r},${y} Q${x + barW},${y} ${x + barW},${y + r} L${x + barW},${padT + innerH} Z`;
+    // 選択月だけを手前に見せる。
+    // ★ SVG の中では transform-style: preserve-3d が平坦化されるため translateZ は効かない
+    //   （実測で確認済み）。代わりに「選択月は太く・濃く、他は細く・薄く」で
+    //   奥行きを作る。幅は band の中で変えるので隣とぶつからない。
     const bar = el('path', {
-      class: 'bar', d, fill: m.incomplete ? 'url(#hatch)' : 'var(--series-1)',
+      class: 'bar' + (selected ? ' is-sel' : ''),
+      d, fill: m.incomplete ? 'url(#hatch)' : 'var(--series-1)',
       opacity: selected || state.month === null ? 1 : 0.42,
     });
     // 初回だけ左から順に立ち上げる。時間の経過を身体で分からせる。
@@ -438,6 +457,50 @@ function renderTrend() {
 /** 期間フィルタに追随するカードに、対象期間を明示する（追随しないカードと見分けるため） */
 function scopeLabel() {
   return state.month ?? '全期間';
+}
+
+/**
+ * 「今月の色」— その期間のデータから地の色を決める。
+ *
+ * 乱数を使わないので、同じデータなら必ず同じ色になる（再現性がある）。
+ * 月ごとに画面の空気が変わることで「あの赤かった月」が記憶の索引になる。
+ *
+ * ★ 変えるのは背景だけ。系列色（--series-*）には触れない。
+ *   月ごとに系列色が変わると、月をまたいだ比較が成立しなくなる。
+ */
+function applyMonthTone() {
+  const rows = byCategory(TX, state.month);
+  const total = rows.reduce((a, c) => a + c.amount, 0);
+  const root = document.documentElement.style;
+  if (total <= 0) { root.setProperty('--month-a', '0'); return; }
+
+  // カテゴリ構成の集中度。1つに偏っていれば0、まんべんなく散っていれば1
+  const share = rows.map((c) => c.amount / total).filter((p) => p > 0);
+  const ent = share.length > 1
+    ? -share.reduce((a, p) => a + p * Math.log2(p), 0) / Math.log2(share.length)
+    : 0;
+
+  const income = state.month
+    ? (DATA.incomes ?? []).filter((i) => i.date.slice(0, 7) === state.month).reduce((a, i) => a + (i.net_amount ?? 0), 0)
+    : (DATA.incomes ?? []).reduce((a, i) => a + (i.net_amount ?? 0), 0);
+  const bal = income > 0 ? (income - total) / income : 0;
+
+  /* 色相を連続的に動かすと、青(208)から暖色(20)へ行く途中で紫や黄を通り、
+     何の色なのか読めなくなる。そこで「黒字＝青緑 / 赤字＝暖色」の2つの
+     アンカーに寄せ、強さ（彩度と濃度）で程度を表す。
+     こうすると「あの赤かった月」がひと目で思い出せる。
+     ※ 収支が5%以内ならどちらにも寄せない（誤差で色が跳ぶのを防ぐ） */
+  const t = Math.max(-1, Math.min(1, bal * 4));   // ±25%で振り切る
+  let hue, strength;
+  if (Math.abs(bal) < 0.05) { hue = 208; strength = 0.15; }
+  else if (t > 0) { hue = 178; strength = t; }     // 黒字 → 青緑
+  else { hue = 18; strength = -t; }                // 赤字 → 暖色
+  if (risk && !risk.covered) { hue = 8; strength = 1; }  // 残高不足は必ず警戒色
+
+  root.setProperty('--month-h', hue.toFixed(1));
+  root.setProperty('--month-s', (18 + ent * 10 + strength * 32).toFixed(1) + '%');
+  root.setProperty('--month-a', (0.05 + strength * 0.11).toFixed(3));   // 上からの光
+  root.setProperty('--month-a2', (0.02 + strength * 0.06).toFixed(3));  // 画面全体の地
 }
 
 /** 増減の表示。支出は「増えたら赤」（家計では増加が悪い） */
