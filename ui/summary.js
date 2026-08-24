@@ -375,3 +375,64 @@ export function reviewQueue(transactions) {
   }
   return [...map.values()].sort((a, b) => b.amount - a.amount);
 }
+
+/**
+ * 水道光熱費を内訳別（電気・ガス・水道）に月別集計する。
+ *
+ * 合算した「水道光熱費」だけでは、増えたのが電気なのかガスなのかが分からない。
+ * 光熱費は季節で動く上に単価改定もあるため、内訳ごとに並べて初めて
+ * 「今年の冬は去年より高い」といった判断ができる。
+ *
+ * ★ 請求のない月は 0 ではなく null を返す。
+ *   水道は隔月請求のため、0 として描くと「使わなかった月」に見えてしまう。
+ *   線は null を飛ばしてつなぐ（app.js 側の責務）。
+ *
+ * 供給元が変わっても内訳（subcategory）でまとめるので、系列は途切れない。
+ */
+export function utilityTrend(transactions, months, category = '水道光熱費') {
+  const ORDER = ['電気', 'ガス', '水道'];
+  const monthList = (months ?? []).map((m) => m.month);
+  const byName = new Map();
+
+  for (const t of transactions) {
+    if (!isSpending(t)) continue;
+    if (t.category !== category) continue;
+    const m = t.date.slice(0, 7);
+    if (!monthList.includes(m)) continue;
+    const name = t.subcategory ?? 'その他';
+    const e = byName.get(name) ?? { name, points: new Map(), merchants: new Set() };
+    e.points.set(m, (e.points.get(m) ?? 0) + t.amount);
+    if (t.merchant) e.merchants.add(t.merchant);
+    byName.set(name, e);
+  }
+
+  const series = [...byName.values()].map((e) => {
+    const points = (months ?? []).map((mi) => ({
+      month: mi.month,
+      amount: e.points.has(mi.month) ? e.points.get(mi.month) : null,
+      incomplete: mi.incomplete,
+    }));
+    const paid = points.filter((p) => p.amount !== null);
+    const total = paid.reduce((a, p) => a + p.amount, 0);
+    // 平均は「請求のあった月」で割る。隔月請求を月数で割ると実額より小さく見える
+    return {
+      name: e.name,
+      points,
+      total,
+      avg: paid.length ? total / paid.length : 0,
+      paidCount: paid.length,
+      latest: paid.length ? paid[paid.length - 1] : null,
+      prev: paid.length > 1 ? paid[paid.length - 2] : null,
+      merchants: [...e.merchants],
+    };
+  });
+
+  series.sort((a, b) => {
+    const ia = ORDER.indexOf(a.name), ib = ORDER.indexOf(b.name);
+    if (ia !== ib) return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
+    return b.total - a.total;
+  });
+
+  const max = Math.max(1, ...series.flatMap((s) => s.points.map((p) => p.amount ?? 0)));
+  return { series, max, months: months ?? [] };
+}

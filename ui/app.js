@@ -18,7 +18,7 @@ const el = (tag, attrs = {}, children = []) => {
   for (const c of [].concat(children)) if (c) node.appendChild(typeof c === 'string' ? document.createTextNode(c) : c);
   return node;
 };
-const SVG_TAGS = new Set(['g', 'rect', 'text', 'line', 'path', 'circle', 'defs', 'pattern', 'tspan']);
+const SVG_TAGS = new Set(['g', 'rect', 'text', 'line', 'path', 'circle', 'defs', 'pattern', 'tspan', 'clipPath']);
 
 /** HTML文字列に差し込むデータは必ずこれを通す（店名や備考はCSV由来で内容を保証できない） */
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => (
@@ -179,6 +179,7 @@ function render() {
   safe('月次推移', renderTrend, '#trend');
   safe('カテゴリ別支出', renderCategories, '#categories');
   safe('固定費と変動費', renderFixedSplit, '#fixedsplit');
+  safe('光熱費の推移', renderUtilities, '#utilities');
   safe('献金', renderTithe, '#tithe');
   safe('固定費一覧', renderFixedList, '#fixedlist');
   safe('要確認キュー', renderReview, '#review');
@@ -452,6 +453,177 @@ function renderTrend() {
     el('span', { class: 'legend-item' }, [el('span', { class: 'legend-swatch', style: 'background: var(--series-1)' }), '支出（利用日ベース）']),
     el('span', { class: 'legend-item' }, [el('span', { class: 'legend-swatch hatched' }), '不完全な月（カード明細の範囲外の日がある）']),
   ]));
+}
+
+/**
+ * 水道光熱費の内訳別推移（電気・ガス・水道）。
+ *
+ * 合算の棒グラフでは「今月は光熱費が高い」までしか分からない。
+ * 光熱費は季節で動くものと、単価改定で恒久的に上がるものが混ざるため、
+ * 内訳を重ねて初めて「どれが上がったのか」が読める。
+ *
+ * ★ 棒ではなく折れ線にしている。棒は「その月の量」、線は「変化の向き」を見せる図で、
+ *   ここで知りたいのは後者（季節の山と、去年より上か下か）。
+ * ★ 請求のない月は点を打たず、その区間だけ破線でまたぐ。
+ *   0 として床に落とすと「使わなかった月」に見え、線を切ると推移が読めなくなる。
+ */
+function renderUtilities() {
+  const host = $('#utilities');
+  host.replaceChildren();
+
+  const ut = utilityTrend(TX, months);
+  if (ut.series.length === 0) {
+    host.appendChild(el('div', { class: 'empty', text: '水道光熱費の記録がありません' }));
+    return;
+  }
+
+  // 系列色は内訳に固定で結びつける。月や並び順で変わると月間比較が壊れる
+  const TONE = { 電気: 'var(--series-2)', ガス: 'var(--series-3)', 水道: 'var(--series-1)' };
+  const toneOf = (name) => TONE[name] ?? 'var(--muted)';
+
+  const W = 860, H = 250, padL = 8, padR = 52, padT = 22, padB = 42;
+  const innerW = W - padL - padR, innerH = H - padT - padB;
+  const band = innerW / ut.months.length;
+  // 軸の上限は実額そのままではなく切りのいい値に上げる。
+  // 目盛りが最大額そのものだと基準として使えず、線の高さを額に変換できない
+  const unit = Math.pow(10, Math.max(0, Math.floor(Math.log10(ut.max)) - 1)) * 5;
+  const top = Math.max(unit, Math.ceil(ut.max / unit) * unit);
+  const cx = (i) => padL + band * i + band / 2;
+  const cy = (v) => padT + innerH - (v / top) * innerH;
+
+  const svg = el('svg', { class: 'chart', viewBox: `0 0 ${W} ${H}`, preserveAspectRatio: 'xMidYMid meet', role: 'img' });
+
+  // 左から開くワイプ。線を stroke-dashoffset で描くと破線区間が壊れるためクリップで送る
+  const clipId = 'util-clip';
+  const wipe = el('rect', { x: 0, y: 0, width: W, height: H });
+  svg.appendChild(el('defs', {}, [el('clipPath', { id: clipId }, [wipe])]));
+
+  // 目盛り（3本）。折れ線は基準線がないと高さを読めない
+  for (const f of [0, 0.5, 1]) {
+    const v = top * f;
+    const y = cy(v);
+    svg.appendChild(el('line', { class: f === 0 ? 'baseline' : 'gridline', x1: padL, y1: y, x2: W - padR, y2: y }));
+    svg.appendChild(el('text', { class: 'lbl-axis', x: W - padR + 6, y: y + 4, text: f === 0 ? '0' : yenFmt(v) }));
+  }
+
+  // 月ラベル
+  ut.months.forEach((m, i) => {
+    const selected = state.month === m.month;
+    svg.appendChild(el('text', {
+      x: cx(i), y: padT + innerH + 17, 'text-anchor': 'middle',
+      text: m.month.slice(5) + '月', fill: selected ? 'var(--ink)' : undefined,
+    }));
+    if (m.incomplete) {
+      svg.appendChild(el('text', {
+        x: cx(i), y: padT + innerH + 31, 'text-anchor': 'middle',
+        'font-size': 10, fill: 'var(--warning-line)', 'font-weight': 600, text: '不完全',
+      }));
+    }
+  });
+
+  const plot = el('g', { 'clip-path': `url(#${clipId})` });
+  const labels = [];
+  let hasGap = false;
+
+  for (const s of ut.series) {
+    const pts = s.points
+      .map((p, i) => ({ ...p, i, x: cx(i), y: p.amount === null ? null : cy(p.amount) }))
+      .filter((p) => p.y !== null);
+    if (pts.length === 0) continue;
+
+    const color = toneOf(s.name);
+
+    // 隣り合う月どうしは実線、請求のない月をまたぐ区間は破線
+    for (let k = 1; k < pts.length; k++) {
+      const a = pts[k - 1], b = pts[k];
+      const gap = b.i - a.i > 1;
+      if (gap) hasGap = true;
+      plot.appendChild(el('line', {
+        class: 'util-line' + (gap ? ' is-gap' : ''),
+        x1: a.x, y1: a.y, x2: b.x, y2: b.y, stroke: color,
+      }));
+    }
+
+    for (const p of pts) {
+      plot.appendChild(el('circle', { class: 'util-dot', cx: p.x, cy: p.y, r: 3.5, fill: color }));
+    }
+
+    // 値ラベルは最新の点だけ。全部に付けると3系列で重なって読めなくなる
+    const last = pts[pts.length - 1];
+    labels.push({ x: last.x, y: last.y - 10, i: last.i, color, text: yenFmt(last.amount) });
+  }
+
+  // 直近の請求月が同じ系列どうしはラベルが重なる（実際に潰れて読めなくなった）。
+  // ★ 下ではなく上へ逃がす。下へ押すと自分の点や下の系列の線に重なり、
+  //   重なりを直したはずが別の読みにくさに変わる
+  const GAP = 14;
+  labels.sort((a, b) => b.y - a.y);
+  for (let k = 1; k < labels.length; k++) {
+    if (labels[k].x !== labels[k - 1].x) continue;
+    if (labels[k - 1].y - labels[k].y < GAP) labels[k].y = labels[k - 1].y - GAP;
+  }
+  for (const L of labels) {
+    plot.appendChild(el('text', {
+      class: 'lbl-value', x: L.x, y: L.y, 'text-anchor': L.i >= ut.months.length - 1 ? 'end' : 'middle',
+      fill: L.color, text: L.text,
+    }));
+  }
+  svg.appendChild(plot);
+
+  if (!REDUCE && firstPaint) {
+    wipe.style.transformBox = 'fill-box';
+    wipe.style.transformOrigin = 'left';
+    wipe.style.transform = 'scaleX(0)';
+    wipe.style.transition = 'transform var(--dur-figure) var(--e-figure) 120ms';
+    requestAnimationFrame(() => requestAnimationFrame(() => { wipe.style.transform = 'scaleX(1)'; }));
+  }
+
+  // ホバー：その月の全内訳をまとめて出す。系列ごとに拾わせると比較にならない
+  const guide = el('line', { class: 'util-guide', x1: 0, y1: padT, x2: 0, y2: padT + innerH, opacity: 0 });
+  svg.appendChild(guide);
+
+  ut.months.forEach((m, i) => {
+    const rows = ut.series.map((s) => {
+      const p = s.points[i];
+      const val = p && p.amount !== null ? `${yenFmt(p.amount)}円` : '請求なし';
+      return `<div class="t-row"><span class="t-key"><span class="legend-swatch" style="background:${toneOf(s.name)}"></span>${esc(s.name)}</span><span>${val}</span></div>`;
+    }).join('');
+    const sum = ut.series.reduce((a, s) => a + (s.points[i]?.amount ?? 0), 0);
+
+    const hit = el('rect', {
+      class: 'hit', x: padL + band * i, y: padT, width: band, height: innerH, 'aria-hidden': 'true',
+      onmouseenter: () => { guide.setAttribute('x1', cx(i)); guide.setAttribute('x2', cx(i)); guide.setAttribute('opacity', 1); },
+      onmousemove: (e) => showTip(e, `<div class="t-val">${yenFmt(sum)}円</div><div class="t-sub">${esc(m.month)}${m.incomplete ? '・明細範囲外あり' : ''}</div>${rows}`),
+      onmouseleave: () => { guide.setAttribute('opacity', 0); hideTip(); },
+      onclick: () => selectMonth(m.month),
+    });
+    hit.style.cursor = 'pointer';
+    svg.appendChild(hit);
+  });
+
+  host.appendChild(svg);
+
+  // 凡例は色の対応表であると同時に、直近額・平均・前回比の要約でもある
+  const legend = el('div', { class: 'util-legend' });
+  for (const s of ut.series) {
+    const d = s.latest && s.prev ? s.latest.amount - s.prev.amount : null;
+    legend.appendChild(el('div', { class: 'util-legend-item' }, [
+      el('span', { class: 'legend-swatch', style: `background: ${toneOf(s.name)}` }),
+      el('span', { class: 'util-legend-name', text: s.name }),
+      el('span', { class: 'util-legend-val' }, [
+        el('b', { text: s.latest ? `${yenFmt(s.latest.amount)}円` : '—' }),
+        el('span', { class: 'util-legend-sub', text: s.latest ? `（${s.latest.month.slice(5)}月）` : '' }),
+      ]),
+      d === null ? el('span', { class: 'util-legend-delta', text: '' })
+        : el('span', { class: 'util-legend-delta ' + (d > 0 ? 'is-up' : d < 0 ? 'is-down' : ''), text: d === 0 ? '±0' : `${d > 0 ? '+' : '−'}${yenFmt(Math.abs(d))}` }),
+      el('span', { class: 'util-legend-avg', text: `平均 ${yenFmt(s.avg)}円 / ${s.paidCount}回` }),
+    ]));
+  }
+  host.appendChild(legend);
+
+  if (hasGap) {
+    host.appendChild(el('div', { class: 'util-note', text: '点線は請求のない月をまたいだ区間（隔月請求など）。「不完全」の月はカード明細の範囲外の日を含むため、実額より少なく出る。' }));
+  }
 }
 
 /** 期間フィルタに追随するカードに、対象期間を明示する（追随しないカードと見分けるため） */

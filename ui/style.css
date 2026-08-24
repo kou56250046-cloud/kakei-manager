@@ -451,6 +451,45 @@ tbody tr:hover td { background: color-mix(in srgb, var(--ink) 6%, var(--surface)
 #tip .t-val { font-weight: 650; font-variant-numeric: tabular-nums; }
 #tip .t-sub { opacity: .72; font-size: 11px; }
 
+/* ------------------------------------------------- 光熱費の推移（折れ線） */
+
+.chart .gridline { stroke: var(--border); stroke-width: 1; stroke-dasharray: 2 4; }
+.chart .lbl-axis { fill: var(--muted); font-size: 10.5px; font-variant-numeric: tabular-nums; }
+
+.chart .util-line { stroke-width: 2; stroke-linecap: round; }
+/* 請求のない月をまたいだ区間。実線と同じ太さでは「毎月払っている」ように見える */
+.chart .util-line.is-gap { stroke-dasharray: 3 5; opacity: .5; stroke-width: 1.5; }
+.chart .util-dot { stroke: var(--surface); stroke-width: 1.5; }
+.chart .util-guide { stroke: var(--baseline); stroke-width: 1; pointer-events: none; transition: opacity .12s linear; }
+
+.util-legend { display: grid; gap: 4px 14px; margin-top: 14px; }
+.util-legend-item {
+  display: grid; grid-template-columns: 11px 3.2em minmax(6.5em, auto) 4.5em 1fr;
+  align-items: center; gap: 8px; font-size: 12px; color: var(--ink-2);
+}
+.util-legend-name { font-weight: 600; color: var(--ink); }
+.util-legend-val { font-variant-numeric: tabular-nums; }
+.util-legend-sub { color: var(--muted); font-size: 11px; }
+.util-legend-delta { font-variant-numeric: tabular-nums; font-size: 11.5px; color: var(--muted); text-align: right; }
+/* 光熱費は「増えたら痛い」。収支と違い、上がりが赤で正しい */
+.util-legend-delta.is-up { color: var(--critical); }
+.util-legend-delta.is-down { color: var(--good-text); }
+.util-legend-avg { color: var(--muted); font-size: 11px; }
+.util-note { color: var(--muted); font-size: 11.5px; margin-top: 10px; line-height: 1.6; }
+
+#tip .t-row { display: flex; justify-content: space-between; gap: 16px; font-size: 11.5px; margin-top: 3px; font-variant-numeric: tabular-nums; }
+#tip .t-key { display: inline-flex; align-items: center; gap: 6px; opacity: .85; }
+
+/* 狭い画面では「名前・直近額・前月差」を1行目に残し、平均を2行目へ送る。
+   1行に全部並べると前月差が右端で切れて、一番見たい数字が読めなくなる */
+@media (max-width: 640px) {
+  .util-legend-item { grid-template-columns: 11px 2.8em minmax(0, 1fr) auto; row-gap: 2px; }
+  .util-legend-val { grid-column: 3; }
+  .util-legend-delta { grid-column: 4; }
+  .util-legend-avg { grid-column: 2 / -1; }
+  .util-legend { gap: 10px 14px; }
+}
+
 /* ---------------------------------------------------------------- misc */
 
 .hint { color: var(--muted); font-size: 11.5px; margin-top: 10px; }
