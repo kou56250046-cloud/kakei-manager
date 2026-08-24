@@ -2,6 +2,7 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { webcrypto as crypto } from 'node:crypto';
 import { ROOT, dataPath, readJson, readAllTransactions, yen } from './lib/io.js';
+import { renderIcon } from './lib/icon.js';
 
 /**
  * GitHub Pages 用の「暗号化されたダッシュボード」を docs/index.html に書き出す。
@@ -145,6 +146,102 @@ mkdirSync(OUT_DIR, { recursive: true });
 writeFileSync(join(OUT_DIR, 'index.html'), html, 'utf8');
 writeFileSync(join(OUT_DIR, '.nojekyll'), '', 'utf8');
 
+// --- PWA（ホーム画面に置いて、オフラインでも開けるようにする） ----------------
+//
+// ★ パスはすべて相対（"./"）にする。
+//   GitHub Pages はリポジトリ名のサブディレクトリ配下（/kakei-manager/）で配信されるため、
+//   "/" 始まりで書くとドメイン直下を指してしまい、インストールもキャッシュも動かない。
+//
+// ★ manifest と sw.js は index.html に同梱できない。
+//   Service Worker は同一オリジンの独立したファイルであることが必須で、
+//   manifest も別ファイルでないとインストール要件を満たさない。
+//   単一ファイル原則の唯一の例外として、この2つ＋アイコンだけを別に出す。
+
+const ICONS = [
+  ['icon-192.png', 192],
+  ['icon-512.png', 512],
+  ['apple-touch-icon.png', 180], // iOS のホーム画面追加は PNG のこの名前を見る
+];
+for (const [name, size] of ICONS) writeFileSync(join(OUT_DIR, name), renderIcon(size));
+
+const manifest = {
+  id: 'kakei-manager',
+  name: '家計管理ダッシュボード',
+  short_name: '家計',
+  description: '暗号化された家計データを、ブラウザの中だけで復号して見るダッシュボード',
+  lang: 'ja',
+  start_url: './',
+  scope: './',
+  display: 'standalone',
+  // スプラッシュはアイコンの地色と揃える。切り替わりで白が一瞬挟まると安っぽく見える
+  background_color: '#1a1a19',
+  theme_color: '#1a1a19',
+  icons: [
+    { src: './icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
+    { src: './icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
+    // 図柄を中央80%に収めてあるので、切り抜かれる maskable にも同じ絵を使える
+    { src: './icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
+  ],
+};
+writeFileSync(join(OUT_DIR, 'manifest.webmanifest'), JSON.stringify(manifest, null, 2), 'utf8');
+
+// キャッシュ名にビルド時刻を入れる。これが変わることでブラウザが sw.js の更新を検知し、
+// activate で古い世代（＝先月の家計データを抱えたHTML）を確実に捨てられる
+const swVersion = new Date().toISOString().replace(/[:.]/g, '-');
+const sw = `/* 生成物。scripts/build-web.js が毎ビルド書き出す（手で編集しない） */
+const VERSION = '${swVersion}';
+const CACHE = 'kakei-' + VERSION;
+const ASSETS = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png', './apple-touch-icon.png'];
+
+self.addEventListener('install', (e) => {
+  e.waitUntil((async () => {
+    const c = await caches.open(CACHE);
+    // addAll は1つでも失敗すると全部落ちる。1ファイルの取りこぼしで
+    // オフライン対応そのものが無効になるのを避け、個別に入れる
+    await Promise.all(ASSETS.map((u) => c.add(u).catch(() => {})));
+    await self.skipWaiting();
+  })());
+});
+
+self.addEventListener('activate', (e) => {
+  e.waitUntil((async () => {
+    for (const k of await caches.keys()) if (k !== CACHE) await caches.delete(k);
+    await self.clients.claim();
+  })());
+});
+
+/*
+ * ★ ネットワーク優先。
+ *   家計データは index.html に同梱されており毎月まるごと書き換わる。
+ *   キャッシュ優先にすると「更新したのに先月の数字が出る」という、
+ *   このアプリで最もやってはいけない事故が起きる。
+ *   通信が無いときだけキャッシュに落とし、オフラインでも開けるようにする。
+ */
+self.addEventListener('fetch', (e) => {
+  const req = e.request;
+  if (req.method !== 'GET') return;
+  if (new URL(req.url).origin !== self.location.origin) return;
+
+  e.respondWith((async () => {
+    try {
+      const fresh = await fetch(req);
+      if (fresh && fresh.ok) (await caches.open(CACHE)).put(req, fresh.clone());
+      return fresh;
+    } catch (err) {
+      const cached = await caches.match(req, { ignoreSearch: true });
+      if (cached) return cached;
+      // 「/」や「?x=1」付きで開かれても、入口のHTMLに寄せて必ず画面を出す
+      if (req.mode === 'navigate') {
+        const fallback = await caches.match('./index.html');
+        if (fallback) return fallback;
+      }
+      throw err;
+    }
+  })());
+});
+`;
+writeFileSync(join(OUT_DIR, 'sw.js'), sw, 'utf8');
+
 /**
  * 平文が混入していないかの自己点検（コミット前の最後の砦）。
  *
@@ -183,6 +280,7 @@ for (const a of amounts) if (a.length >= 4 && scrubbed.includes(a)) leaks.push([
 
 console.log('');
 console.log(`  docs/index.html を生成しました（${(Buffer.byteLength(html) / 1024).toFixed(0)} KB）`);
+console.log('  PWA: manifest.webmanifest / sw.js / アイコン3種も出力しました');
 console.log(`  暗号化: ${payload.alg} / PBKDF2 ${ITERATIONS.toLocaleString()}回`);
 console.log(`  ${data.subtitle}（この行は暗号化側に入っており、公開HTMLには出ません）`);
 if (leaks.length > 0) {

@@ -7,6 +7,18 @@
 <meta name="referrer" content="no-referrer">
 <title>家計管理ダッシュボード</title>
 
+<!-- PWA（ホーム画面に置く／オフラインで開く）。
+     ★ href はすべて相対。GitHub Pages はリポジトリ名のサブディレクトリ配下で
+       配信されるため、"/" 始まりだとドメイン直下を指してインストールに失敗する。 -->
+<link rel="manifest" href="./manifest.webmanifest">
+<link rel="icon" type="image/png" sizes="192x192" href="./icon-192.png">
+<link rel="apple-touch-icon" href="./apple-touch-icon.png">
+<meta name="theme-color" content="#f9f9f7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#1a1a19" media="(prefers-color-scheme: dark)">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="家計">
 <style>/*__STYLE__*/</style>
 <style>
 /* 合言葉の入力画面 */
@@ -349,6 +361,21 @@ form.addEventListener('submit', async (e) => {
   const mode = saved ?? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
   document.documentElement.setAttribute('data-theme', mode);
 })();
+
+/*
+ * Service Worker を登録して、通信が無くても開けるようにする。
+ *
+ * ★ 登録に失敗しても画面は普通に動く（オフライン対応が無効になるだけ）。
+ *   file:// で直接開いた場合や、http で配信した場合は登録できないため、
+ *   例外で止めずに黙って諦める。
+ * ★ キャッシュされるのは暗号文のままの HTML。
+ *   復号結果はメモリ上にしか無いので、キャッシュから家計データは読めない。
+ */
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('./sw.js').catch(() => {});
+  });
+}
 </script>
 </body>
 </html>
