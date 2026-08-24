@@ -21,13 +21,18 @@
   <div id="banners"></div>
   <div class="filterbar" id="filters"></div>
 
+  <nav class="tabs" id="tabs" role="tablist" aria-label="表示の切り替え">
+    <button class="tab" type="button" role="tab" data-tab="month" id="tab-month" aria-selected="false" tabindex="-1">今月</button>
+    <button class="tab" type="button" role="tab" data-tab="trend" id="tab-trend" aria-selected="false" tabindex="-1">傾向</button>
+    <button class="tab" type="button" role="tab" data-tab="fixed" id="tab-fixed" aria-selected="false" tabindex="-1">固定費</button>
+    <button class="tab" type="button" role="tab" data-tab="money" id="tab-money" aria-selected="false" tabindex="-1">お金の出入り</button>
+    <button class="tab" type="button" role="tab" data-tab="detail" id="tab-detail" aria-selected="false" tabindex="-1">明細</button>
+  </nav>
+
   <div class="grid">
+    <section class="card" data-tab="always"><div class="hero-row" id="hero"></div></section>
 
-    <section class="card">
-      <div class="hero-row" id="hero"></div>
-    </section>
-
-    <section class="card">
+    <section class="card" data-tab="month">
       <div class="card-head">
         <h2 class="card-title">月次支出の推移</h2>
         <span class="card-note">全期間（フィルタ非追随）／棒をクリックで期間切替</span>
@@ -35,7 +40,15 @@
       <div id="trend"></div>
     </section>
 
-    <section class="card span-8">
+    <section class="card" data-tab="month">
+      <div class="card-head">
+        <h2 class="card-title">いつもの幅と比べる</h2>
+        <span class="card-note">選択中の月／過去の月の最小〜最大と比較</span>
+      </div>
+      <div id="bands"></div>
+    </section>
+
+    <section class="card span-6" data-tab="month">
       <div class="card-head">
         <h2 class="card-title">カテゴリ別支出</h2>
         <span class="card-note" id="cat-note"></span>
@@ -43,15 +56,23 @@
       <div id="categories"></div>
     </section>
 
-    <section class="card span-4">
+    <section class="card span-6" data-tab="month">
       <div class="card-head">
-        <h2 class="card-title">固定費と変動費</h2>
-        <span class="card-note" id="split-note"></span>
+        <h2 class="card-title">日別の支出</h2>
+        <span class="card-note">選択中の月／マスにカーソルで内訳</span>
       </div>
-      <div id="fixedsplit"></div>
+      <div id="calendar"></div>
     </section>
 
-    <section class="card">
+    <section class="card" data-tab="trend">
+      <div class="card-head">
+        <h2 class="card-title">変動費と固定費の推移</h2>
+        <span class="card-note">全期間（フィルタ非追随）／棒をクリックで期間切替</span>
+      </div>
+      <div id="vartrend"></div>
+    </section>
+
+    <section class="card" data-tab="trend">
       <div class="card-head">
         <h2 class="card-title">光熱費の推移（電気・ガス・水道）</h2>
         <span class="card-note">全期間（フィルタ非追随）／点をクリックで期間切替</span>
@@ -59,47 +80,7 @@
       <div id="utilities"></div>
     </section>
 
-    <section class="card span-6">
-      <div class="card-head">
-        <h2 class="card-title">献金（手取り基準）</h2>
-        <span class="card-note">全期間</span>
-      </div>
-      <div id="tithe"></div>
-    </section>
-
-    <section class="card span-6">
-      <div class="card-head">
-        <h2 class="card-title">要確認キュー</h2>
-        <span class="card-note">分類が確定していない取引</span>
-      </div>
-      <div id="review"></div>
-    </section>
-
-    <section class="card">
-      <div class="card-head">
-        <h2 class="card-title">固定費一覧</h2>
-        <span class="card-note" id="fixed-note"></span>
-      </div>
-      <div id="fixedlist"></div>
-    </section>
-
-    <section class="card span-6">
-      <div class="card-head">
-        <h2 class="card-title">口座残高</h2>
-        <span class="card-note">最新スナップショット</span>
-      </div>
-      <div id="accounts"></div>
-    </section>
-
-    <section class="card span-6">
-      <div class="card-head">
-        <h2 class="card-title">カード引落予定</h2>
-        <span class="card-note">全期間</span>
-      </div>
-      <div id="payments"></div>
-    </section>
-
-    <section class="card">
+    <section class="card" data-tab="trend">
       <div class="card-head">
         <h2 class="card-title">店舗別 支出 TOP20</h2>
         <span class="card-note" id="mer-note"></span>
@@ -107,7 +88,71 @@
       <div id="merchants"></div>
     </section>
 
-    <section class="card">
+    <section class="card" data-tab="fixed">
+      <div class="card-head">
+        <h2 class="card-title">固定費の変化</h2>
+        <span class="card-note">全期間／金額が変わったものだけ</span>
+      </div>
+      <div id="pricechanges"></div>
+    </section>
+
+    <section class="card span-6" data-tab="fixed">
+      <div class="card-head">
+        <h2 class="card-title">年間コミット額</h2>
+        <span class="card-note">今の契約を1年続けた場合</span>
+      </div>
+      <div id="annual"></div>
+    </section>
+
+    <section class="card span-6" data-tab="fixed">
+      <div class="card-head">
+        <h2 class="card-title">固定費と変動費</h2>
+        <span class="card-note" id="split-note"></span>
+      </div>
+      <div id="fixedsplit"></div>
+    </section>
+
+    <section class="card" data-tab="fixed">
+      <div class="card-head">
+        <h2 class="card-title">固定費一覧</h2>
+        <span class="card-note" id="fixed-note"></span>
+      </div>
+      <div id="fixedlist"></div>
+    </section>
+
+    <section class="card span-6" data-tab="money">
+      <div class="card-head">
+        <h2 class="card-title">口座残高</h2>
+        <span class="card-note">最新スナップショット</span>
+      </div>
+      <div id="accounts"></div>
+    </section>
+
+    <section class="card span-6" data-tab="money">
+      <div class="card-head">
+        <h2 class="card-title">カード引落予定</h2>
+        <span class="card-note">全期間</span>
+      </div>
+      <div id="payments"></div>
+    </section>
+
+    <section class="card" data-tab="money">
+      <div class="card-head">
+        <h2 class="card-title">献金（手取り基準）</h2>
+        <span class="card-note">全期間</span>
+      </div>
+      <div id="tithe"></div>
+    </section>
+
+    <section class="card" data-tab="detail">
+      <div class="card-head">
+        <h2 class="card-title">要確認キュー</h2>
+        <span class="card-note">分類が確定していない取引</span>
+      </div>
+      <div id="review"></div>
+    </section>
+
+    <section class="card" data-tab="detail">
       <div class="card-head">
         <h2 class="card-title">取引一覧</h2>
         <span class="card-note" id="tx-note"></span>

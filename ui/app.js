@@ -32,6 +32,9 @@ const state = {
   category: '',
   sort: { key: 'date', dir: 'desc' },
   txLimit: 200,        // 「残りN件を表示」で解除する
+  calFixed: false,     // カレンダーに固定費を含めるか（既定は変動費のみ）
+  openMerchant: null,  // 店舗別で推移を開いている店
+  tab: 'month',        // 表示中のタブ（initTabs が localStorage から復元する）
 };
 
 // ------------------------------------------------------------------ motion
@@ -189,6 +192,101 @@ state.month = completeMonths.length ? completeMonths[completeMonths.length - 1].
 
 const scoped = () => (state.month ? TX.filter((t) => t.date.slice(0, 7) === state.month) : TX);
 
+// ------------------------------------------------------------------ タブ
+
+/**
+ * カードをタブに分ける。
+ *
+ * カードが17枚まで増え、1枚の縦長ページでは端から端まで届かなくなった。
+ *
+ * ★ 警告（#banners）と期間フィルタはタブに入れない。
+ *   残高不足のような「行動に繋がるもの」は、どのタブを見ていても目に入る必要がある。
+ * ★ 隠すのは表示だけで、描画は全タブ分やる。
+ *   タブを開いた瞬間に組み立てると、切り替えのたびに待たされる。
+ *   取引は数百件で、全部描いても一瞬で終わる規模。
+ * ★ 隠れているタブに要確認が溜まると気づけないので、件数をタブに出す。
+ *   タブ導入で唯一失われるのが「全部が目に入る」ことなので、そこだけ補う。
+ */
+const TAB_KEY = 'kakei-tab';
+
+function tabButtons() {
+  return [...document.querySelectorAll('#tabs .tab')];
+}
+
+function applyTab(scroll = false) {
+  for (const sec of document.querySelectorAll('.card[data-tab]')) {
+    const t = sec.dataset.tab;
+    sec.classList.toggle('is-hidden', t !== 'always' && t !== state.tab);
+  }
+  for (const b of tabButtons()) {
+    const on = b.dataset.tab === state.tab;
+    b.classList.toggle('is-on', on);
+    b.setAttribute('aria-selected', on ? 'true' : 'false');
+    b.tabIndex = on ? 0 : -1;
+  }
+
+  // タブを切り替えたとき、前のタブの下のほうを見ていると
+  // 切り替え先の途中に着地して「何も変わっていない」ように見える
+  if (scroll) {
+    const bar = $('#tabs');
+    if (bar && bar.getBoundingClientRect().top < 0) {
+      bar.scrollIntoView({ block: 'start', behavior: REDUCE ? 'auto' : 'smooth' });
+    }
+  }
+}
+
+function selectTab(tab, scroll = true) {
+  if (state.tab === tab) return;
+  state.tab = tab;
+  try { localStorage.setItem(TAB_KEY, tab); } catch { /* プライベートモードなど。記憶しないだけ */ }
+  applyTab(scroll);
+}
+
+function initTabs() {
+  const bar = $('#tabs');
+  if (!bar) return;
+  const buttons = tabButtons();
+  if (buttons.length === 0) return;
+
+  const known = buttons.map((b) => b.dataset.tab);
+  let saved = null;
+  try { saved = localStorage.getItem(TAB_KEY); } catch { /* 読めなければ既定のタブ */ }
+  state.tab = known.includes(saved) ? saved : known[0];
+
+  buttons.forEach((b, i) => {
+    b.addEventListener('click', () => selectTab(b.dataset.tab));
+    // 左右キーで移動できるようにする（role="tablist" の作法）
+    b.addEventListener('keydown', (e) => {
+      const d = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0;
+      if (!d) return;
+      e.preventDefault();
+      const next = buttons[(i + d + buttons.length) % buttons.length];
+      selectTab(next.dataset.tab, false);
+      next.focus();
+    });
+  });
+  applyTab();
+}
+
+/** 隠れているタブに溜まっているものを、タブ自身に出す */
+function updateTabBadges() {
+  const marks = { detail: reviews.length };
+  for (const b of tabButtons()) {
+    const n = marks[b.dataset.tab] ?? 0;
+    let badge = b.querySelector('.tab-badge');
+    if (n > 0) {
+      if (!badge) {
+        badge = el('span', { class: 'tab-badge' });
+        b.appendChild(badge);
+      }
+      badge.textContent = String(n);
+      badge.title = `要確認 ${n}件`;
+    } else if (badge) {
+      badge.remove();
+    }
+  }
+}
+
 // ------------------------------------------------------------------ 描画
 
 /** 期間を切り替える。押した直後の反応は遅らせず、表示の入れ替えだけを滑らかにする */
@@ -226,7 +324,12 @@ function render() {
   safe('サマリー', renderHero, '#hero');
   safe('月次推移', renderTrend, '#trend');
   safe('カテゴリ別支出', renderCategories, '#categories');
+  safe('いつもの幅', renderBands, '#bands');
+  safe('変動費の推移', renderVariableTrend, '#vartrend');
+  safe('日別カレンダー', renderCalendar, '#calendar');
   safe('固定費と変動費', renderFixedSplit, '#fixedsplit');
+  safe('固定費の変化', renderPriceChanges, '#pricechanges');
+  safe('年間コミット額', renderAnnual, '#annual');
   safe('光熱費の推移', renderUtilities, '#utilities');
   safe('献金', renderTithe, '#tithe');
   safe('固定費一覧', renderFixedList, '#fixedlist');
@@ -235,6 +338,7 @@ function render() {
   safe('口座残高', renderAccounts, '#accounts');
   safe('カード引落予定', renderPayments, '#payments');
   safe('取引一覧', renderTable, '#txtable');
+  safe('タブの件数', updateTabBadges);
 }
 
 function renderBanner() {
@@ -681,6 +785,414 @@ function renderUtilities() {
   }
 }
 
+/**
+ * 固定費の値上がり検知。
+ *
+ * ★ 「定着したもの」と「直近1ヶ月だけのもの」を分けて出す。
+ *   ドル建てのサブスクは為替で毎月動くため、1ヶ月だけの変化を改定として断定すると
+ *   毎月それらしい警告が出て、本当の値上げが埋もれる。
+ *   決めつけずに「様子見」として弱く置く。
+ */
+function renderPriceChanges() {
+  const host = $('#pricechanges');
+  host.replaceChildren();
+
+  const rows = priceChanges(TX, DATA.fixedCosts, months);
+  const settled = rows.filter((r) => r.settled);
+  const watching = rows.filter((r) => !r.settled);
+
+  if (rows.length === 0) {
+    host.appendChild(el('div', { class: 'empty', text: '金額が変わった固定費はありません' }));
+    return;
+  }
+
+  const section = (list, title, note, weak) => {
+    if (list.length === 0) return;
+    host.appendChild(el('div', { class: 'pc-head' }, [
+      el('span', { class: 'pc-head-title', text: title }),
+      el('span', { class: 'pc-head-note', text: note }),
+    ]));
+    for (const r of list) {
+      const spark = el('span', { class: 'pc-spark' });
+      const max = Math.max(...r.series.map((p) => p.amount), 1);
+      for (const p of r.series) {
+        const bar = el('i', { title: `${p.month} ${yenFmt(p.amount)}円` });
+        bar.style.height = `${Math.max(12, (p.amount / max) * 100)}%`;
+        bar.style.background = p.amount === r.to ? 'var(--series-1)' : 'var(--baseline)';
+        spark.appendChild(bar);
+      }
+      host.appendChild(el('div', { class: 'pc-row' + (weak ? ' is-weak' : '') }, [
+        el('div', { class: 'pc-name' }, [
+          el('b', { text: r.name }),
+          el('span', { class: 'pc-cat', text: `${r.category}${r.subcategory ? ' / ' + r.subcategory : ''}` }),
+        ]),
+        spark,
+        el('div', { class: 'pc-move' }, [
+          el('span', { class: 'pc-from', text: `${yenFmt(r.from)}円` }),
+          el('span', { class: 'pc-arrow', text: '→' }),
+          el('span', { class: 'pc-to', text: `${yenFmt(r.to)}円` }),
+        ]),
+        el('div', { class: 'pc-diff ' + (r.up ? 'is-up' : 'is-down') }, [
+          el('b', { text: `${r.up ? '+' : '−'}${yenFmt(Math.abs(r.diff))}` }),
+          el('span', { class: 'pc-annual', text: `年 ${r.up ? '+' : '−'}${yenFmt(Math.abs(r.annualImpact))}円` }),
+        ]),
+        el('div', { class: 'pc-when', text: `${r.month.slice(5)}月から${r.settled ? `・${r.stableMonths}ヶ月継続` : ''}` }),
+      ]));
+    }
+  };
+
+  section(settled, '継続している改定', '2ヶ月以上同じ額が続いている');
+  section(watching, '様子見', '直近1ヶ月だけの変化。為替や購入内容の違いかもしれない', true);
+
+  host.appendChild(el('div', { class: 'hint', text: '光熱費は季節で動くのが正常なため監視していません。収入に比例する費目も同様です。' }));
+}
+
+/**
+ * 年間コミット額 — 「今の契約を続けると1年でいくら出ていくか」。
+ *
+ * ★ サブスクは店ごとに分解する。マスタでは1行にまとまっているが、
+ *   それでは「どれをやめると年いくら浮くか」に答えられない。
+ */
+function renderAnnual() {
+  const host = $('#annual');
+  host.replaceChildren();
+
+  const ac = annualCommitment(DATA.fixedCosts, TX, months);
+  if (ac.rows.length === 0) {
+    host.appendChild(el('div', { class: 'empty', text: '固定費が登録されていません' }));
+    return;
+  }
+
+  const head = el('div', { class: 'annual-total' }, [
+    el('div', { class: 'annual-total-value' }, [
+      el('b', { text: yenFmt(ac.total) }),
+      el('span', { class: 'annual-unit', text: '円 / 年' }),
+    ]),
+    el('div', { class: 'annual-total-sub', text: `月あたり ${yenFmt(Math.round(ac.total / 12))}円` }),
+  ]);
+  host.appendChild(head);
+
+  if (ac.estimated) {
+    host.appendChild(el('div', { class: 'annual-note' }, [
+      `${ac.observedMonths}ヶ月分の実績からの推定です。請求の間隔（毎月・隔月・年1回）を判定して年額に直しています。`,
+    ]));
+  }
+
+  const CADENCE = { monthly: '毎月', bimonthly: '隔月', yearly: '年1回', irregular: '不定期' };
+  const max = Math.max(...ac.rows.map((r) => r.annual), 1);
+
+  const list = el('div', { class: 'annual-list' });
+  for (const r of ac.rows) {
+    const bar = el('div', { class: 'annual-bar' });
+    bar.style.width = `${Math.max(1, (r.annual / max) * 100)}%`;
+    list.appendChild(el('div', { class: 'annual-row' }, [
+      el('div', { class: 'annual-name' }, [
+        el('span', { text: r.name, title: r.name }),
+        el('span', { class: 'annual-cadence', text: CADENCE[r.cadence] ?? '' }),
+      ]),
+      el('div', { class: 'annual-track' }, [bar]),
+      el('div', { class: 'annual-value', text: `${yenFmt(r.annual)}円` }),
+    ]));
+  }
+  host.appendChild(list);
+
+  if (ac.subscriptions.length > 0) {
+    host.appendChild(el('div', { class: 'pc-head' }, [
+      el('span', { class: 'pc-head-title', text: 'サブスクの内訳' }),
+      el('span', { class: 'pc-head-note', text: `合計 ${yenFmt(ac.subscriptionTotal)}円 / 年・やめた分だけ浮く` }),
+    ]));
+    // 上の一覧はマスタの1行をまとめて月平均から出しているため、店ごとに
+    // 請求間隔（毎月・年1回）を判定したこちらとは額が食い違う。こちらのほうが正確
+    host.appendChild(el('div', {
+      class: 'annual-note',
+      text: '店ごとに請求の間隔を判定しているため、上の一覧の「サブスク」行より正確です。',
+    }));
+    const subs = el('div', { class: 'annual-list' });
+    const smax = Math.max(...ac.subscriptions.map((r) => r.annual), 1);
+    for (const r of ac.subscriptions) {
+      const bar = el('div', { class: 'annual-bar is-sub' });
+      bar.style.width = `${Math.max(1, (r.annual / smax) * 100)}%`;
+      subs.appendChild(el('div', { class: 'annual-row' }, [
+        el('div', { class: 'annual-name' }, [
+          el('span', { text: r.merchant, title: r.merchant }),
+          el('span', { class: 'annual-cadence', text: CADENCE[r.cadence] ?? '' }),
+        ]),
+        el('div', { class: 'annual-track' }, [bar]),
+        el('div', { class: 'annual-value', text: `${yenFmt(r.annual)}円` }),
+      ]));
+    }
+    host.appendChild(subs);
+  }
+}
+
+/**
+ * カテゴリの「いつもの幅」。
+ *
+ * 過去の月の最小〜最大を帯で敷き、今月の位置を点で打つ。
+ * 帯の外に出たものだけを色で拾う。前月比と違い「たまたま高い月」に振り回されない。
+ */
+function renderBands() {
+  const host = $('#bands');
+  host.replaceChildren();
+
+  const cb = categoryBands(TX, months, state.month);
+  if (!cb.available) {
+    host.appendChild(el('div', {
+      class: 'empty',
+      text: state.month
+        ? '比較できる月がまだ足りません（完全な月が4ヶ月必要です）'
+        : '月を選ぶと、その月が「いつもの幅」に収まっているか分かります',
+    }));
+    return;
+  }
+
+  const outliers = cb.rows.filter((r) => r.status !== 'normal');
+  host.appendChild(el('div', { class: 'bands-lead' }, [
+    outliers.length === 0
+      ? `${state.month} は、どのカテゴリも過去 ${cb.baseMonths}ヶ月の幅に収まっています。`
+      : `過去 ${cb.baseMonths}ヶ月の幅から外れたのは ${outliers.length}件です。`,
+  ]));
+
+  const max = Math.max(...cb.rows.map((r) => Math.max(r.current, r.max)), 1);
+  const pct = (v) => `${(v / max) * 100}%`;
+
+  for (const r of cb.rows) {
+    const track = el('div', { class: 'band-track' });
+
+    // 「いつもの幅」（最小〜最大）
+    if (!r.neverBefore) {
+      const band = el('div', { class: 'band-range' });
+      band.style.left = pct(r.min);
+      band.style.width = `${Math.max(0.6, ((r.max - r.min) / max) * 100)}%`;
+      track.appendChild(band);
+
+      const med = el('div', { class: 'band-median', title: `中央値 ${yenFmt(r.median)}円` });
+      med.style.left = pct(r.median);
+      track.appendChild(med);
+    }
+
+    const dot = el('div', { class: `band-dot is-${r.status}`, title: `${state.month} ${yenFmt(r.current)}円` });
+    dot.style.left = pct(r.current);
+    track.appendChild(dot);
+
+    const label = r.status === 'new' ? '初めて'
+      : r.status === 'high' ? '過去最高'
+        : r.status === 'low' ? '過去最低' : '';
+
+    const row = el('div', { class: `band-row is-${r.status}` }, [
+      el('div', { class: 'band-name', text: r.category, title: r.category }),
+      track,
+      el('div', { class: 'band-value' }, [
+        el('b', { text: yenFmt(r.current) }),
+        label ? el('span', { class: `band-tag is-${r.status}`, text: label }) : null,
+      ]),
+    ]);
+
+    bindTip(row, () => {
+      if (r.neverBefore) {
+        return `<div class="t-val">${yenFmt(r.current)}円</div><div class="t-sub">${esc(r.category)}</div>`
+          + `<div class="t-row"><span class="t-key">過去${r.baseCount}ヶ月</span><span>発生なし</span></div>`;
+      }
+      const d = r.vsMedian;
+      return `<div class="t-val">${yenFmt(r.current)}円</div><div class="t-sub">${esc(r.category)}・${esc(state.month)}</div>`
+        + `<div class="t-row"><span class="t-key">いつもの幅</span><span>${yenFmt(r.min)} 〜 ${yenFmt(r.max)}円</span></div>`
+        + `<div class="t-row"><span class="t-key">中央値</span><span>${yenFmt(r.median)}円</span></div>`
+        + `<div class="t-row"><span class="t-key">中央値との差</span><span>${d >= 0 ? '+' : '−'}${yenFmt(Math.abs(d))}円</span></div>`
+        + `<div class="t-row"><span class="t-key">比較した月数</span><span>${r.baseCount}ヶ月</span></div>`;
+    });
+    host.appendChild(row);
+  }
+
+  host.appendChild(el('div', { class: 'hint', text: '帯は過去の月の最小〜最大、縦線は中央値。不完全な月は比較に使っていません。' }));
+}
+
+/**
+ * 日別カレンダー。
+ *
+ * ★ 既定では固定費を除く。引落日が未確認で月初に寄せてあるため、
+ *   混ぜると初日だけが濃くなって日々の使い方が読めない。
+ */
+function renderCalendar() {
+  const host = $('#calendar');
+  host.replaceChildren();
+
+  const month = state.month ?? (months.length ? months[months.length - 1].month : null);
+  const dt = dailyTotals(TX, month, state.calFixed);
+  if (!dt) { host.appendChild(el('div', { class: 'empty', text: 'データがありません' })); return; }
+
+  host.appendChild(el('div', { class: 'cal-head' }, [
+    el('div', { class: 'cal-sum' }, [
+      el('b', { text: `${yenFmt(dt.total)}円` }),
+      el('span', { text: `・使った日 ${dt.spentDays}日／使わなかった日 ${dt.zeroDays}日` }),
+    ]),
+    el('button', {
+      class: 'cal-toggle' + (state.calFixed ? ' is-on' : ''),
+      type: 'button',
+      text: state.calFixed ? '固定費を含む' : '変動費のみ',
+      onclick: () => { state.calFixed = !state.calFixed; renderCalendar(); },
+    }),
+  ]));
+
+  const grid = el('div', { class: 'cal-grid' });
+  for (const w of ['日', '月', '火', '水', '木', '金', '土']) {
+    grid.appendChild(el('div', { class: 'cal-wd', text: w }));
+  }
+  for (let i = 0; i < dt.leading; i++) grid.appendChild(el('div', { class: 'cal-cell is-empty' }));
+
+  for (const c of dt.cells) {
+    const cell = el('div', {
+      class: 'cal-cell' + (c.amount === 0 ? ' is-zero' : '') + (c.weekday === 0 || c.weekday === 6 ? ' is-weekend' : ''),
+    }, [
+      el('span', { class: 'cal-day', text: String(c.day) }),
+      c.amount > 0 ? el('span', { class: 'cal-amt', text: yenFmt(c.amount) }) : null,
+    ]);
+    if (c.amount > 0) {
+      // 濃さは平方根で。金額に比例させると突出した1日だけが濃く、他が全部白くなる
+      const k = Math.sqrt(c.amount / dt.max);
+      cell.style.background = `color-mix(in srgb, var(--series-1) ${Math.round(k * 78)}%, var(--surface))`;
+      if (k > 0.62) cell.classList.add('is-dark');
+    }
+    bindTip(cell, () => {
+      if (c.amount === 0) return `<div class="t-val">0円</div><div class="t-sub">${esc(c.date)}</div>`;
+      const top = c.items.slice(0, 4)
+        .map((t) => `<div class="t-row"><span class="t-key">${esc(t.merchant)}</span><span>${yenFmt(t.amount)}円</span></div>`)
+        .join('');
+      const rest = c.items.length > 4 ? `<div class="t-row"><span class="t-key">ほか ${c.items.length - 4}件</span><span></span></div>` : '';
+      return `<div class="t-val">${yenFmt(c.amount)}円</div><div class="t-sub">${esc(c.date)}・${c.count}件</div>${top}${rest}`;
+    });
+    grid.appendChild(cell);
+  }
+  host.appendChild(grid);
+
+  if (!state.calFixed && dt.fixedTotal > 0) {
+    host.appendChild(el('div', {
+      class: 'hint',
+      text: `固定費 ${yenFmt(dt.fixedTotal)}円は日付を持たない（引落日が未確認で月初に寄せている）ため、既定では外しています。`,
+    }));
+  }
+}
+
+/**
+ * 固定費と変動費に分けた月次推移。
+ *
+ * 積み上げにすると、下に置いた側だけが底から伸びて読みやすく、
+ * 上に載せた側は基線が動くため変化が読めない。
+ * ここで見たいのは変動費の増減なので、変動費を下に置く。
+ */
+function renderVariableTrend() {
+  const host = $('#vartrend');
+  host.replaceChildren();
+
+  const vt = variableTrend(TX, months);
+  if (vt.points.length === 0) {
+    host.appendChild(el('div', { class: 'empty', text: 'データがありません' }));
+    return;
+  }
+
+  const W = 860, H = 250, padL = 8, padR = 52, padT = 26, padB = 42;
+  const innerW = W - padL - padR, innerH = H - padT - padB;
+  const band = innerW / vt.points.length;
+  const barW = Math.min(30, band * 0.56);
+
+  const unit = Math.pow(10, Math.max(0, Math.floor(Math.log10(vt.max)) - 1)) * 5;
+  const top = Math.max(unit, Math.ceil(vt.max / unit) * unit);
+
+  const svg = el('svg', { class: 'chart', viewBox: `0 0 ${W} ${H}`, preserveAspectRatio: 'xMidYMid meet', role: 'img' });
+  svg.appendChild(el('defs', {}, [
+    el('pattern', { id: 'hatch-v', width: 6, height: 6, patternTransform: 'rotate(45)', patternUnits: 'userSpaceOnUse' }, [
+      el('rect', { width: 6, height: 6, fill: 'var(--surface)' }),
+      el('line', { x1: 0, y1: 0, x2: 0, y2: 6, stroke: 'var(--warning-line)', 'stroke-width': 3, opacity: 0.55 }),
+    ]),
+  ]));
+
+  for (const f of [0, 0.5, 1]) {
+    const y = padT + innerH - f * innerH;
+    svg.appendChild(el('line', { class: f === 0 ? 'baseline' : 'gridline', x1: padL, y1: y, x2: W - padR, y2: y }));
+    svg.appendChild(el('text', { class: 'lbl-axis', x: W - padR + 6, y: y + 4, text: f === 0 ? '0' : yenFmt(top * f) }));
+  }
+
+  // 変動費の平均線。今月がいつもより上か下かを、目で1回で捉えられる。
+  // ★ ラベルは棒の上ではなく右の余白に置く。棒に重ねると必ずどれかと衝突する
+  if (vt.avgVariable) {
+    const ay = padT + innerH - (vt.avgVariable / top) * innerH;
+    svg.appendChild(el('line', { class: 'avg-line', x1: padL, y1: ay, x2: W - padR, y2: ay }));
+    svg.appendChild(el('text', {
+      class: 'lbl-axis', x: W - padR + 6, y: ay + 4,
+      fill: 'var(--series-1)', text: yenFmt(vt.avgVariable),
+    }));
+  }
+
+  vt.points.forEach((p, i) => {
+    const x = padL + band * i + (band - barW) / 2;
+    const hv = (p.variable / top) * innerH;
+    const hf = (p.fixed / top) * innerH;
+    const yv = padT + innerH - hv;
+    const yf = yv - hf;
+    const selected = state.month === p.month;
+    const dim = state.month !== null && !selected;
+
+    // 変動費（下）
+    const rv = el('rect', {
+      class: 'vt-seg', x, y: yv, width: barW, height: Math.max(1, hv),
+      fill: p.incomplete ? 'url(#hatch-v)' : 'var(--series-1)', opacity: dim ? 0.42 : 1,
+    });
+    // 固定費（上）
+    const rf = el('rect', {
+      class: 'vt-seg', x, y: yf, width: barW, height: Math.max(1, hf),
+      fill: p.incomplete ? 'url(#hatch-v)' : 'var(--series-3)', opacity: dim ? 0.3 : 0.72,
+    });
+    if (!REDUCE && firstPaint) {
+      for (const [r, d] of [[rv, i * 55], [rf, i * 55 + 90]]) {
+        r.style.transformBox = 'fill-box';
+        r.style.transformOrigin = 'bottom';
+        r.style.transform = 'scaleY(0)';
+        r.style.transition = `transform var(--dur-figure) var(--e-figure) ${d}ms`;
+        requestAnimationFrame(() => requestAnimationFrame(() => { r.style.transform = 'scaleY(1)'; }));
+      }
+    }
+    svg.appendChild(rf);
+    svg.appendChild(rv);
+
+    svg.appendChild(el('text', {
+      class: 'lbl-value', x: x + barW / 2, y: yv - 6, 'text-anchor': 'middle',
+      fill: 'var(--series-1)', text: yenFmt(p.variable),
+    }));
+    svg.appendChild(el('text', {
+      x: padL + band * i + band / 2, y: padT + innerH + 17, 'text-anchor': 'middle',
+      text: p.month.slice(5) + '月', fill: selected ? 'var(--ink)' : undefined,
+    }));
+    if (p.incomplete) {
+      svg.appendChild(el('text', {
+        x: padL + band * i + band / 2, y: padT + innerH + 31, 'text-anchor': 'middle',
+        'font-size': 10, fill: 'var(--warning-line)', 'font-weight': 600, text: '不完全',
+      }));
+    }
+
+    const hit = el('rect', {
+      class: 'hit', x: padL + band * i, y: padT, width: band, height: innerH, 'aria-hidden': 'true',
+      onclick: () => selectMonth(p.month),
+    });
+    bindTip(hit, () => {
+      const share = p.total ? (p.variable / p.total) * 100 : 0;
+      return `<div class="t-val">${yenFmt(p.variable)}円</div>`
+        + `<div class="t-sub">${esc(p.month)} の変動費${p.incomplete ? '・明細範囲外あり' : ''}</div>`
+        + `<div class="t-row"><span class="t-key"><span class="legend-swatch" style="background:var(--series-1)"></span>変動費</span><span>${yenFmt(p.variable)}円</span></div>`
+        + `<div class="t-row"><span class="t-key"><span class="legend-swatch" style="background:var(--series-3)"></span>固定費</span><span>${yenFmt(p.fixed)}円</span></div>`
+        + `<div class="t-row"><span class="t-key">変動費の割合</span><span>${share.toFixed(1)}%</span></div>`;
+    });
+    hit.style.cursor = 'pointer';
+    svg.appendChild(hit);
+  });
+
+  host.appendChild(svg);
+  host.appendChild(el('div', { class: 'legend' }, [
+    el('span', { class: 'legend-item' }, [el('span', { class: 'legend-swatch', style: 'background: var(--series-1)' }), '変動費（自分で動かせる分）']),
+    el('span', { class: 'legend-item' }, [el('span', { class: 'legend-swatch', style: 'background: var(--series-3); opacity:.72' }), '固定費']),
+    el('span', { class: 'legend-item' }, [el('span', { class: 'legend-swatch hatched' }), '不完全な月']),
+    el('span', { class: 'legend-item' }, [el('span', { class: 'legend-dash' }), '変動費の平均（完全な月のみ）']),
+  ]));
+}
+
 /** 期間フィルタに追随するカードに、対象期間を明示する（追随しないカードと見分けるため） */
 function scopeLabel() {
   return state.month ?? '全期間';
@@ -1011,13 +1523,27 @@ function renderMerchants() {
   const list = byMerchant(TX, state.month).slice(0, 20);
   host.replaceChildren();
   if (list.length === 0) { host.appendChild(el('div', { class: 'empty', text: 'データがありません' })); return; }
-  const rows = list.map((m, i) => el('tr', {}, [
-    el('td', { text: String(i + 1), class: 'num' }),
-    el('td', { class: 'strong', text: m.merchant }),
-    el('td', {}, [el('span', { class: 'tag', text: m.category })]),
-    el('td', { class: 'num', text: String(m.count) }),
-    el('td', { class: 'num strong', text: yenFmt(m.amount) }),
-  ]));
+  const rows = [];
+  list.forEach((m, i) => {
+    const open = state.openMerchant === m.merchant;
+    rows.push(el('tr', {
+      class: 'mer-row' + (open ? ' is-open' : ''),
+      // 総額だけでは「回数が増えた」のか「1回あたりが上がった」のかが分からない。
+      // 押したときだけ推移を開く（常時展開すると20行が縦に伸びて一覧性を失う）
+      onclick: () => { state.openMerchant = open ? null : m.merchant; renderMerchants(); },
+    }, [
+      el('td', { text: String(i + 1), class: 'num' }),
+      el('td', { class: 'strong' }, [
+        el('span', { class: 'mer-caret', text: open ? '▾' : '▸' }),
+        m.merchant,
+      ]),
+      el('td', {}, [el('span', { class: 'tag', text: m.category })]),
+      el('td', { class: 'num', text: String(m.count) }),
+      el('td', { class: 'num strong', text: yenFmt(m.amount) }),
+    ]));
+    if (open) rows.push(el('tr', { class: 'mer-detail' }, [el('td', { colspan: 5 }, [merchantPanel(m.merchant)])]));
+  });
+
   host.appendChild(el('div', { class: 'tbl-wrap' }, [
     el('table', {}, [
       el('thead', {}, [el('tr', {}, [
@@ -1027,6 +1553,46 @@ function renderMerchants() {
       el('tbody', {}, rows),
     ]),
   ]));
+  host.appendChild(el('div', { class: 'hint', text: '行を押すと、その店の月ごとの金額・件数・1回あたりの推移が開きます（推移は常に全期間）。' }));
+}
+
+/**
+ * 1店舗の月次推移。
+ *
+ * ★ 金額だけでなく件数と1回あたりも出す。
+ *   総額が増えたとき、行く回数が増えたのか単価が上がったのかで打ち手が変わる。
+ * ★ 推移は期間フィルタに追随させない。
+ *   月で絞った状態で開くと1本しか出ず、推移として意味を成さない。
+ */
+function merchantPanel(merchant) {
+  const mt = merchantTrend(TX, months, merchant);
+  const wrap = el('div', { class: 'mer-panel' });
+
+  wrap.appendChild(el('div', { class: 'mer-stats' }, [
+    el('span', {}, [el('b', { text: yenFmt(mt.total) }), '円 / 全期間']),
+    el('span', {}, [el('b', { text: String(mt.count) }), '件']),
+    el('span', {}, ['1回あたり ', el('b', { text: yenFmt(mt.unit) }), '円']),
+    el('span', {}, [el('b', { text: String(mt.monthsSeen) }), `ヶ月 / ${months.length}ヶ月で利用`]),
+  ]));
+
+  const bars = el('div', { class: 'mer-bars' });
+  for (const p of mt.points) {
+    const col = el('div', { class: 'mer-col' + (p.count === 0 ? ' is-none' : '') + (state.month === p.month ? ' is-sel' : '') });
+    const bar = el('div', { class: 'mer-bar' });
+    bar.style.height = `${p.amount ? Math.max(4, (p.amount / mt.max) * 100) : 0}%`;
+    if (p.incomplete) bar.classList.add('is-incomplete');
+    col.appendChild(el('div', { class: 'mer-bartrack' }, [bar]));
+    col.appendChild(el('div', { class: 'mer-mon', text: p.month.slice(5) }));
+    col.appendChild(el('div', { class: 'mer-cnt', text: p.count ? `${p.count}件` : '—' }));
+    bindTip(col, () => (p.count === 0
+      ? `<div class="t-val">利用なし</div><div class="t-sub">${esc(p.month)}</div>`
+      : `<div class="t-val">${yenFmt(p.amount)}円</div><div class="t-sub">${esc(p.month)}${p.incomplete ? '・明細範囲外あり' : ''}</div>`
+        + `<div class="t-row"><span class="t-key">件数</span><span>${p.count}件</span></div>`
+        + `<div class="t-row"><span class="t-key">1回あたり</span><span>${yenFmt(p.unit)}円</span></div>`));
+    bars.appendChild(col);
+  }
+  wrap.appendChild(bars);
+  return wrap;
 }
 
 function renderAccounts() {
@@ -1268,6 +1834,7 @@ function initControls() {
 }
 
 initControls();
+initTabs();
 render();
 
 /**
