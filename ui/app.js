@@ -107,11 +107,59 @@ function moveTip(evt) {
     let x = tipEvt.clientX + pad;
     let y = tipEvt.clientY - tipH - 8;
     if (x + tipW > window.innerWidth - 8) x = tipEvt.clientX - tipW - pad;
-    if (y < 8) y = tipEvt.clientY + pad;
+    // 上に置けないときは下に回すが、指の場合は手で隠れるので大きく逃がす
+    if (y < 8) y = tipEvt.clientY + (isTouching() ? 34 : pad);
+    // 指で操作中は、チップ自体が画面外にはみ出して読めなくなるのを防ぐ
+    if (x < 8) x = 8;
+    if (y + tipH > window.innerHeight - 8) y = Math.max(8, window.innerHeight - tipH - 8);
     tip.style.transform = `translate3d(${x}px, ${y}px, 0)`;
   });
 }
 function hideTip() { tip.classList.remove('is-on'); }
+
+/**
+ * 指で触っている間だけツールチップを出す。
+ *
+ * ★ タッチでは mouseleave が発火しない。
+ *   ブラウザはタップのたびに mouseenter/mousemove を「エミュレート」して送ってくるが、
+ *   離れたことを知らせる mouseleave は他の場所を叩くまで来ない。
+ *   そのため詳細が画面に残り続けていた（スマホで実際に起きていた）。
+ *
+ * ★ 端末で分岐しない（`ontouchstart in window` などで二分しない）。
+ *   タッチ対応のノートPCではマウスと指が交互に来るため、端末で決め打つと必ずどちらかが壊れる。
+ *   「直前の入力が指だったか」だけを見る。
+ *
+ * ★ エミュレートされたマウスイベントは touchend の**後**に飛んでくる。
+ *   だから touchend で消しただけでは、直後の mousemove がもう一度出してしまう。
+ *   直近にタッチがあった間はマウス側を丸ごと無視する。
+ */
+let lastTouchAt = 0;
+const isTouching = () => Date.now() - lastTouchAt < 700;
+
+function bindTip(node, htmlOf, hooks = {}) {
+  const enter = () => hooks.onShow?.();
+  const leave = () => { hooks.onHide?.(); hideTip(); };
+
+  node.addEventListener('mouseenter', () => { if (!isTouching()) enter(); });
+  node.addEventListener('mousemove', (e) => { if (!isTouching()) showTip(e, htmlOf()); });
+  node.addEventListener('mouseleave', () => { if (!isTouching()) leave(); });
+
+  // Touch オブジェクトは clientX/clientY を持つので、そのまま showTip に渡せる
+  node.addEventListener('touchstart', (e) => {
+    lastTouchAt = Date.now();
+    enter();
+    showTip(e.touches[0], htmlOf());
+  }, { passive: true });
+  node.addEventListener('touchmove', (e) => {
+    lastTouchAt = Date.now();
+    moveTip(e.touches[0]);
+  }, { passive: true });
+
+  // touchcancel も拾う。指を置いたままスクロールに移った場合はこちらしか来ない
+  const end = () => { lastTouchAt = Date.now(); leave(); };
+  node.addEventListener('touchend', end, { passive: true });
+  node.addEventListener('touchcancel', end, { passive: true });
+}
 
 // ------------------------------------------------------------------ 派生データ
 
@@ -436,13 +484,15 @@ function renderTrend() {
     const hit = el('rect', {
       class: 'hit', x: padL + band * i, y: padT, width: band, height: innerH,
       'aria-hidden': 'true',
-      onmouseenter: () => bar.classList.add('is-hover'),
-      onmousemove: (e) => showTip(e, `<div class="t-val">${yenFmt(m.amount)}円</div><div class="t-sub">${esc(m.month)}・${m.count}件${m.incomplete ? '・明細範囲外あり' : ''}</div>`),
-      onmouseleave: () => { bar.classList.remove('is-hover'); hideTip(); },
       // チップと挙動を揃える（以前は再クリックで全期間に戻るトグルで、
       // 「もう一度見ようとしたら全期間に戻った」という事故になっていた）
       onclick: () => selectMonth(m.month),
     });
+    bindTip(
+      hit,
+      () => `<div class="t-val">${yenFmt(m.amount)}円</div><div class="t-sub">${esc(m.month)}・${m.count}件${m.incomplete ? '・明細範囲外あり' : ''}</div>`,
+      { onShow: () => bar.classList.add('is-hover'), onHide: () => bar.classList.remove('is-hover') },
+    );
     hit.style.cursor = 'pointer';
     svg.appendChild(hit);
   });
@@ -592,11 +642,16 @@ function renderUtilities() {
 
     const hit = el('rect', {
       class: 'hit', x: padL + band * i, y: padT, width: band, height: innerH, 'aria-hidden': 'true',
-      onmouseenter: () => { guide.setAttribute('x1', cx(i)); guide.setAttribute('x2', cx(i)); guide.setAttribute('opacity', 1); },
-      onmousemove: (e) => showTip(e, `<div class="t-val">${yenFmt(sum)}円</div><div class="t-sub">${esc(m.month)}${m.incomplete ? '・明細範囲外あり' : ''}</div>${rows}`),
-      onmouseleave: () => { guide.setAttribute('opacity', 0); hideTip(); },
       onclick: () => selectMonth(m.month),
     });
+    bindTip(
+      hit,
+      () => `<div class="t-val">${yenFmt(sum)}円</div><div class="t-sub">${esc(m.month)}${m.incomplete ? '・明細範囲外あり' : ''}</div>${rows}`,
+      {
+        onShow: () => { guide.setAttribute('x1', cx(i)); guide.setAttribute('x2', cx(i)); guide.setAttribute('opacity', 1); },
+        onHide: () => guide.setAttribute('opacity', 0),
+      },
+    );
     hit.style.cursor = 'pointer';
     svg.appendChild(hit);
   });
@@ -709,9 +764,8 @@ function renderCategories() {
           const fill = el('div', {
             class: 'barrow-fill',
             style: `width: ${Math.max(0.4, (c.amount / max) * 100)}%`,
-            onmousemove: (e) => showTip(e, `<div class="t-val">${yenFmt(c.amount)}円</div><div class="t-sub">${esc(c.category)}・${c.count}件・${pct.toFixed(1)}%</div>${tipDelta}`),
-            onmouseleave: hideTip,
           });
+          bindTip(fill, () => `<div class="t-val">${yenFmt(c.amount)}円</div><div class="t-sub">${esc(c.category)}・${c.count}件・${pct.toFixed(1)}%</div>${tipDelta}`);
           // 最終幅のまま scaleX(0)→1。width を動かすと毎フレーム再レイアウトになり、
           // かつ角丸が横に引き伸ばされて歪む
           if (!REDUCE && firstPaint) {
@@ -756,18 +810,11 @@ function renderFixedSplit() {
   if (fv.total <= 0) { host.appendChild(el('div', { class: 'empty', text: 'データがありません' })); return; }
   const fPct = (fv.fixed / fv.total) * 100;
 
-  host.appendChild(el('div', { class: 'split' }, [
-    el('div', {
-      class: 'split-seg s1', style: `width: ${Math.max(fPct, 0.5)}%`,
-      onmousemove: (e) => showTip(e, `<div class="t-val">${yenFmt(fv.fixed)}円</div><div class="t-sub">固定費・${fPct.toFixed(1)}%</div>`),
-      onmouseleave: hideTip,
-    }),
-    el('div', {
-      class: 'split-seg s2', style: `width: ${Math.max(100 - fPct, 0.5)}%`,
-      onmousemove: (e) => showTip(e, `<div class="t-val">${yenFmt(fv.variable)}円</div><div class="t-sub">変動費・${(100 - fPct).toFixed(1)}%</div>`),
-      onmouseleave: hideTip,
-    }),
-  ]));
+  const segFixed = el('div', { class: 'split-seg s1', style: `width: ${Math.max(fPct, 0.5)}%` });
+  const segVar = el('div', { class: 'split-seg s2', style: `width: ${Math.max(100 - fPct, 0.5)}%` });
+  bindTip(segFixed, () => `<div class="t-val">${yenFmt(fv.fixed)}円</div><div class="t-sub">固定費・${fPct.toFixed(1)}%</div>`);
+  bindTip(segVar, () => `<div class="t-val">${yenFmt(fv.variable)}円</div><div class="t-sub">変動費・${(100 - fPct).toFixed(1)}%</div>`);
+  host.appendChild(el('div', { class: 'split' }, [segFixed, segVar]));
   host.appendChild(el('div', { class: 'legend' }, [
     el('span', { class: 'legend-item' }, [
       el('span', { class: 'legend-swatch', style: 'background: var(--series-1)' }),
@@ -1214,7 +1261,10 @@ function initControls() {
     }).catch(() => {});
   });
 
-  window.addEventListener('mousemove', (e) => { if (tip.classList.contains('is-on')) moveTip(e); });
+  // 指で操作した直後に飛んでくるエミュレート mousemove で位置がずれないようにする
+  window.addEventListener('mousemove', (e) => {
+    if (!isTouching() && tip.classList.contains('is-on')) moveTip(e);
+  });
 }
 
 initControls();
