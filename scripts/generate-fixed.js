@@ -13,11 +13,17 @@ import { roundTithe } from '../ui/summary.js';
  *
  * 生成物は source: 'fixed' / 'recurring' を持ち、実行のたびに作り直される
  * （元データではなく導出データなので、毎回消して作り直すのが安全）。
+ *
+ * ★ 実額があればそれを使う（bills_source）
+ *   dカード分は npm run import:dcard でドコモの請求実額を data/dcard_bills.json に
+ *   取り込んでいる。その月の実額があれば概算（fixed_costs.json の amount）ではなく
+ *   実額で生成する。実額のない月だけ概算にフォールバックする。
  */
 
 const config = readJson(join(ROOT, 'config.json'), {});
 const fixedCosts = readJson(dataPath('fixed_costs.json'), []);
 const recurringIncomes = readJson(dataPath('recurring_incomes.json'), []);
+const dcardBills = readJson(dataPath('dcard_bills.json'), []);
 const allTx = readAllTransactions();
 const incomes = readJson(dataPath('incomes.json'), []);
 
@@ -74,8 +80,14 @@ for (const inc of mergedIncomes) {
 
 // --- 固定費の生成 -----------------------------------------------------------
 
+// 実額の参照表。bills_source で参照先を選ぶ（今は dカードのみ）
+const billsBySource = {
+  dcard: new Map(dcardBills.filter((b) => b.usage_month).map((b) => [b.usage_month, b])),
+};
+
 const genTx = [];
 const skipped = [];
+let actualCount = 0;
 
 for (const fc of fixedCosts) {
   if (fc.auto_generate !== true) continue;
@@ -84,13 +96,24 @@ for (const fc of fixedCosts) {
     if (!inRange(m, fc.start_month, fc.end_month)) continue;
 
     let amount;
-    if (fc.compute === 'tithe') {
+    let bill = null;
+    if (fc.bills_source) {
+      bill = billsBySource[fc.bills_source]?.get(m) ?? null;
+    }
+    if (bill) {
+      amount = bill.amount;
+      actualCount++;
+    } else if (fc.compute === 'tithe') {
       const base = titheBase.get(m) ?? 0;
       if (base <= 0) continue; // その月に対象収入がなければ献金も発生しない
       amount = roundTithe(base * (config?.tithe?.rate ?? 0.1), config?.tithe?.rounding ?? 'ceil', config?.tithe?.rounding_unit ?? 100);
     } else {
       amount = fc.amount;
     }
+
+    // その月かぎりの費用（回線を足した月の事務手数料など）は、翌月と比べたときに
+    // 「値上がり」に見える。何が乗っていたのかを note に残しておく
+    const oneTime = (bill?.one_time ?? []).map((o) => o.name).join('・');
 
     if (amount === null || amount === undefined) {
       skipped.push({ name: fc.name, month: m, reason: '金額が未登録' });
@@ -114,7 +137,12 @@ for (const fc of fixedCosts) {
       payment_method: fc.payment_method,
       is_fixed_cost: true,
       fixed_cost_id: fc.id,
-      note: fc.payment_day ? '' : '引落日は未確認のため月初で計上',
+      note: [
+        bill ? '請求内訳の実額' : (fc.bills_source ? '実額が未取込のため概算' : ''),
+        oneTime ? `${oneTime}を含む` : '',
+        fc.payment_day ? '' : '引落日は未確認のため月初で計上',
+      ].filter(Boolean).join(' / '),
+      amount_source: fc.bills_source ? (bill ? 'actual' : 'estimate') : 'master',
       confidence: 'high',
       needs_review: false,
     });
@@ -138,6 +166,10 @@ for (const t of genTx) {
 console.log('  生成した固定費:');
 for (const [, e] of [...byCost].sort((a, b) => b[1].sum - a[1].sum)) {
   console.log(`    ${String(yen(e.sum)).padStart(12)}  ${String(e.n).padStart(2)}ヶ月  ${e.name}`);
+}
+
+if (actualCount > 0) {
+  console.log('\n  うち ' + actualCount + 'ヶ月分は請求内訳の実額を使いました（概算ではありません）');
 }
 
 if (genIncomes.length > 0) {

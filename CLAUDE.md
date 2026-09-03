@@ -40,10 +40,11 @@ npm run close -- --yes     # 対話なし
 
 npm run import           # imports/*.csv → data/transactions/YYYY-MM.json
 npm run import:payslip   # 給与明細/*.pdf → data/incomes.json
+npm run import:dcard     # d-カード/*.txt → data/dcard_bills.json（ドコモの請求実額）
 npm run generate         # 固定費マスタ・定期収入マスタ → 月次の取引・収入を生成
 npm run summary          # 集計をターミナルに表示（npm run summary -- 2026-05 で月指定）
 npm run build            # data/ + ui/ → dist/index.html（単一ファイル）
-npm run update           # import → import:payslip → generate → build を一括実行
+npm run update           # import → import:payslip → import:dcard → generate → build を一括実行
 
 npm run review -- --list # 要確認の一覧（正規化キー付き）
 npm run review -- --all  # category_rules.json を直した後、既存データに反映する
@@ -67,10 +68,11 @@ node scripts/set-category.js --match ノクテイプラザ --date 2026-05-02 \
 
 1. イオンカード会員サイトから明細CSVをダウンロードし `imports/` に置く
 2. 給与明細PDFを `給与明細/` に置く
-3. `npm run update`
-4. 要確認が出たらルール追記 → `npm run review -- --all`
-5. 月初にネットバンキングで残高を確認し `data/balances.json` に追記 → `npm run build`
-6. `dist/index.html` を開いて確認 → `git commit`
+3. My docomo の「ご利用料金の内訳」をコピーし `d-カード/○月（○月請求分）.txt` として保存する
+4. `npm run update`
+5. 要確認が出たらルール追記 → `npm run review -- --all`
+6. 月初にネットバンキングで残高を確認し `data/balances.json` に追記 → `npm run build`
+7. `dist/index.html` を開いて確認 → `git commit`
 
 **固定費は触らない。カード引落額も手入力しない**（CSVの「今回ご請求金額」から自動取得）。
 
@@ -108,6 +110,25 @@ node scripts/set-category.js --match ノクテイプラザ --date 2026-05-02 \
 
 仕様書4.3は「カード払いは生成しない」としているが、これは**明細を取り込んでいるカードに限った話**。
 取り込んでいないカードまで生成しないと、その支出は永久に集計されない。
+
+### 実額があれば概算より優先する（`bills_source`）
+
+dカードは明細CSVが取れないが、My docomo の請求内訳はコピーできる。
+`npm run import:dcard` が `d-カード/*.txt` を読み、**利用月ごとの実額**を
+`data/dcard_bills.json` に記録する。
+
+- **ここでは取引を作らない。** 作ると生成分と二重計上になる。
+  取引を作るのは `generate-fixed.js` 側で、`bills_source: "dcard"` を持つ固定費について
+  **その月の実額があれば実額、なければ `amount`（概算）**で生成する
+- 生成した取引には `amount_source: 'actual' | 'estimate'` が付く。
+  実額なら note が「請求内訳の実額」になる
+- **電話番号は保存しない**（`parse-dcard.js` が回線数だけ数えて捨てている）。
+  `d-カード/*.txt` 自体は `.gitignore` 済み
+- ファイル名から利用月を読む（`7月（8月請求分）.txt` / `2026年7月.txt`）。
+  年が無ければ「実行日から見て直近の過去」として補う
+- 検算は**回線ごとの金額の合計 ＝ 合計欄**で行う。カード明細と同じく、合わなくても中止しない
+- **回線追加の月は `契約事務手数料` が乗る。** そのままだと翌月と比べて「値上がり」に見えるため、
+  一時費用の名前を note に残している
 
 ### 生成物の扱い
 
@@ -258,7 +279,7 @@ CLI（`calc-summary.js`）とブラウザの両方から使う。`build.js` が 
 
 | 項目 | 内容 |
 |---|---|
-| カード | イオンゴールド（10日締め・翌月2日払い）と **dカード**（ドコモ料金。明細CSVは未取込） |
+| カード | イオンゴールド（10日締め・翌月2日払い）と **dカード**（ドコモ料金。明細CSVは取れないので、請求内訳を `d-カード/` に置いて実額を取り込む） |
 | 口座 | みずほ銀行（メイン・給与振込・カード引落）／ 三井住友銀行（貯蓄） |
 | 光熱費 | **電気・ガス・水道すべてイオンカード払い**（東京電力 / プロパンガス / 川崎市水道料金） |
 | ガスの供給元 | 2026-02 までは **JA組合プロパン**、2026-03 から **全農東日本エネルギー**（`ゼンノウヒガシニホンエネル`）。同社はガソリンスタンドもやっているため紛らわしいが、**この明細はガス代**。当初 `交通費/ガソリン` に誤分類しており、本人の指摘で修正した |

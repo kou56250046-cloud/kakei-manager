@@ -76,6 +76,7 @@ const data = {
   backup: {
     categoryRules: readJson(dataPath('category_rules.json'), null),
     recurringIncomes: readJson(dataPath('recurring_incomes.json'), null),
+    dcardBills: readJson(dataPath('dcard_bills.json'), null),
   },
   // ★ 見出しの副題も暗号化側に入れる。
   //   以前はこれを平文で埋め込んでいたため、合言葉なしで

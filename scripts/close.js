@@ -66,9 +66,9 @@ function run(script, extra = []) {
   if (r.status !== 0) throw new Error(`${script} が失敗しました（終了コード ${r.status}）`);
 }
 
-// ---------------------------------------------------------------- 1〜3. 取込
+// ---------------------------------------------------------------- 1〜4. 取込
 
-const TOTAL = DO_COMMIT ? 7 : 6;
+const TOTAL = DO_COMMIT ? 8 : 7;
 
 step(1, TOTAL, 'カード明細を取り込む');
 run('import-card.js');
@@ -76,12 +76,17 @@ run('import-card.js');
 step(2, TOTAL, '給与明細を取り込む');
 run('import-payslip.js');
 
-step(3, TOTAL, '固定費・定期収入を生成する');
+// dカードは明細CSVを取り込めないため、ドコモの請求内訳から実額だけを拾う。
+// 取引を作るのは次の generate-fixed.js 側（ここで作ると二重計上になる）
+step(3, TOTAL, 'ドコモ（dカード）の請求内訳を取り込む');
+run('import-dcard.js');
+
+step(4, TOTAL, '固定費・定期収入を生成する');
 run('generate-fixed.js');
 
-// ---------------------------------------------------------------- 4. 要確認
+// ---------------------------------------------------------------- 5. 要確認
 
-step(4, TOTAL, '分類が未確定の取引を確定する');
+step(5, TOTAL, '分類が未確定の取引を確定する');
 
 const transactions = readAllTransactions();
 const pending = new Map();
@@ -190,9 +195,9 @@ if (added > 0) {
   run('reclassify.js', ['--all']);
 }
 
-// ---------------------------------------------------------------- 5. 残高
+// ---------------------------------------------------------------- 6. 残高
 
-step(5, TOTAL, '口座残高を記録する');
+step(6, TOTAL, '口座残高を記録する');
 
 const accounts = readJson(dataPath('accounts.json'), []);
 const balances = readJson(dataPath('balances.json'), []);
@@ -223,9 +228,9 @@ if (!rl) {
   }
 }
 
-// ---------------------------------------------------------------- 6. ビルド
+// ---------------------------------------------------------------- 7. ビルド
 
-step(6, TOTAL, 'ダッシュボードを生成する');
+step(7, TOTAL, 'ダッシュボードを生成する');
 run('build.js');
 try {
   run('build-web.js');
@@ -234,10 +239,10 @@ try {
   line(`  ⚠ Web公開版の生成は飛ばしました（${e.message}）`);
 }
 
-// ---------------------------------------------------------------- 7. commit
+// ---------------------------------------------------------------- 8. commit
 
 if (DO_COMMIT) {
-  step(7, TOTAL, 'コミットする');
+  step(8, TOTAL, 'コミットする');
   const month = new Date().toISOString().slice(0, 7);
   spawnSync('git', ['add', '-A'], { stdio: 'inherit', cwd: ROOT });
   const r = spawnSync('git', ['commit', '-m', `${month} の家計を締め`], { stdio: 'inherit', cwd: ROOT });
