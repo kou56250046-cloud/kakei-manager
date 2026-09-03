@@ -1,5 +1,5 @@
 /* 生成物。scripts/build-web.js が毎ビルド書き出す（手で編集しない） */
-const VERSION = '2026-09-03T00-39-36-107Z';
+const VERSION = '2026-09-03T05-48-02-380Z';
 const CACHE = 'kakei-' + VERSION;
 const ASSETS = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png', './apple-touch-icon.png'];
 
