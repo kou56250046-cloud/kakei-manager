@@ -1,0 +1,272 @@
+{
+  "schemaVersion": "1.1.0",
+  "generatedAt": "2026-09-11T00:39:14.658Z",
+  "project": "kakei-manager",
+  "axesRun": [
+    {
+      "axis": "運用性",
+      "detector": "ops-reviewer",
+      "findings": 13
+    },
+    {
+      "axis": "データの寿命と移行耐性",
+      "detector": "ops-reviewer",
+      "findings": 13
+    },
+    {
+      "axis": "ダッシュボード",
+      "detector": "viz-reviewer",
+      "findings": 12
+    },
+    {
+      "axis": "可視化",
+      "detector": "viz-reviewer",
+      "findings": 12
+    },
+    {
+      "axis": "機能提案",
+      "detector": "ui-reviewer-pm",
+      "findings": 6
+    },
+    {
+      "axis": "発見性",
+      "detector": "ui-reviewer-pm",
+      "findings": 6
+    }
+  ],
+  "axesSkipped": [
+    {
+      "axis": "UIデザイン",
+      "reason": "Wave 2 がレート上限で中断（ui-reviewer-art / -ux）"
+    },
+    {
+      "axis": "パフォーマンスとアクセシビリティ",
+      "reason": "同上（ui-reviewer-ux / -frontend）"
+    },
+    {
+      "axis": "保守コスト",
+      "reason": "同上（ui-reviewer-frontend）"
+    },
+    {
+      "axis": "機械学習の適用",
+      "reason": "Wave 3 未実行（ml-fit-reviewer）"
+    }
+  ],
+  "note": "高優先度のみ台帳に登録。中・低は各レビュアーの報告に残る。ID は 対象ファイル + アンカー から作る",
+  "counts": {
+    "total": 15,
+    "byStatus": {
+      "draft": 15
+    },
+    "byAxis": {
+      "ダッシュボード": 3,
+      "データの寿命と移行耐性": 6,
+      "発見性": 1,
+      "機能提案": 1,
+      "運用性": 2,
+      "可視化": 2
+    },
+    "byMeasure": {
+      "欠陥修正": 12,
+      "採点差分": 1,
+      "利用ログ": 2
+    }
+  },
+  "entries": [
+    {
+      "id": "dashboard--kakei-manager--2c7875f0",
+      "axis": "ダッシュボード",
+      "anchor": "renderCalendar",
+      "priority": "高",
+      "status": "draft",
+      "measure": "欠陥修正",
+      "verdict": null,
+      "specPath": "",
+      "branch": "",
+      "adoptedAt": null,
+      "file": ".claude/improvements/dashboard--kakei-manager--2c7875f0.md"
+    },
+    {
+      "id": "dashboard--kakei-manager--8f273fdf",
+      "axis": "ダッシュボード",
+      "anchor": "renderHero",
+      "priority": "高",
+      "status": "draft",
+      "measure": "採点差分",
+      "verdict": null,
+      "specPath": "",
+      "branch": "",
+      "adoptedAt": null,
+      "file": ".claude/improvements/dashboard--kakei-manager--8f273fdf.md"
+    },
+    {
+      "id": "dashboard--kakei-manager--f929e87e",
+      "axis": "ダッシュボード",
+      "anchor": "spendableNow",
+      "priority": "高",
+      "status": "draft",
+      "measure": "欠陥修正",
+      "verdict": null,
+      "specPath": "",
+      "branch": "",
+      "adoptedAt": null,
+      "file": ".claude/improvements/dashboard--kakei-manager--f929e87e.md"
+    },
+    {
+      "id": "data--kakei-manager--03bd7fd3",
+      "axis": "データの寿命と移行耐性",
+      "anchor": "step7-buildWeb",
+      "priority": "高",
+      "status": "draft",
+      "measure": "欠陥修正",
+      "verdict": null,
+      "specPath": "",
+      "branch": "",
+      "adoptedAt": null,
+      "file": ".claude/improvements/data--kakei-manager--03bd7fd3.md"
+    },
+    {
+      "id": "data--kakei-manager--4ea6f229",
+      "axis": "データの寿命と移行耐性",
+      "anchor": "writeJson",
+      "priority": "高",
+      "status": "draft",
+      "measure": "欠陥修正",
+      "verdict": null,
+      "specPath": "",
+      "branch": "",
+      "adoptedAt": null,
+      "file": ".claude/improvements/data--kakei-manager--4ea6f229.md"
+    },
+    {
+      "id": "data--kakei-manager--cbd349c2",
+      "axis": "データの寿命と移行耐性",
+      "anchor": "merchantKey",
+      "priority": "高",
+      "status": "draft",
+      "measure": "欠陥修正",
+      "verdict": null,
+      "specPath": "",
+      "branch": "",
+      "adoptedAt": null,
+      "file": ".claude/improvements/data--kakei-manager--cbd349c2.md"
+    },
+    {
+      "id": "data--kakei-manager--dd9ee897",
+      "axis": "データの寿命と移行耐性",
+      "anchor": "analysis.start_month",
+      "priority": "高",
+      "status": "draft",
+      "measure": "欠陥修正",
+      "verdict": null,
+      "specPath": "",
+      "branch": "",
+      "adoptedAt": null,
+      "file": ".claude/improvements/data--kakei-manager--dd9ee897.md"
+    },
+    {
+      "id": "data--kakei-manager--e6ffb558",
+      "axis": "データの寿命と移行耐性",
+      "anchor": "webpass",
+      "priority": "高",
+      "status": "draft",
+      "measure": "欠陥修正",
+      "verdict": null,
+      "specPath": "",
+      "branch": "",
+      "adoptedAt": null,
+      "file": ".claude/improvements/data--kakei-manager--e6ffb558.md"
+    },
+    {
+      "id": "data--kakei-manager--f71381f2",
+      "axis": "データの寿命と移行耐性",
+      "anchor": "readAllTransactions",
+      "priority": "高",
+      "status": "draft",
+      "measure": "欠陥修正",
+      "verdict": null,
+      "specPath": "",
+      "branch": "",
+      "adoptedAt": null,
+      "file": ".claude/improvements/data--kakei-manager--f71381f2.md"
+    },
+    {
+      "id": "discovery--kakei-manager--736b96c9",
+      "axis": "発見性",
+      "anchor": "renderBanner",
+      "priority": "高",
+      "status": "draft",
+      "measure": "利用ログ",
+      "verdict": null,
+      "specPath": "",
+      "branch": "",
+      "adoptedAt": null,
+      "file": ".claude/improvements/discovery--kakei-manager--736b96c9.md"
+    },
+    {
+      "id": "feature--kakei-manager--0c710c1e",
+      "axis": "機能提案",
+      "anchor": "step5-tithe",
+      "priority": "高",
+      "status": "draft",
+      "measure": "利用ログ",
+      "verdict": null,
+      "specPath": "",
+      "branch": "",
+      "adoptedAt": null,
+      "file": ".claude/improvements/feature--kakei-manager--0c710c1e.md"
+    },
+    {
+      "id": "ops--kakei-manager--5302fb91",
+      "axis": "運用性",
+      "anchor": "parseMeisai",
+      "priority": "高",
+      "status": "draft",
+      "measure": "欠陥修正",
+      "verdict": null,
+      "specPath": "",
+      "branch": "",
+      "adoptedAt": null,
+      "file": ".claude/improvements/ops--kakei-manager--5302fb91.md"
+    },
+    {
+      "id": "ops--kakei-manager--5a94b864",
+      "axis": "運用性",
+      "anchor": "絶対に守ること",
+      "priority": "高",
+      "status": "draft",
+      "measure": "欠陥修正",
+      "verdict": null,
+      "specPath": "",
+      "branch": "",
+      "adoptedAt": null,
+      "file": ".claude/improvements/ops--kakei-manager--5a94b864.md"
+    },
+    {
+      "id": "viz--kakei-manager--21989a28",
+      "axis": "可視化",
+      "anchor": "dailyTotals",
+      "priority": "高",
+      "status": "draft",
+      "measure": "欠陥修正",
+      "verdict": null,
+      "specPath": "",
+      "branch": "",
+      "adoptedAt": null,
+      "file": ".claude/improvements/viz--kakei-manager--21989a28.md"
+    },
+    {
+      "id": "viz--kakei-manager--d5c91de4",
+      "axis": "可視化",
+      "anchor": "renderFixedSplit",
+      "priority": "高",
+      "status": "draft",
+      "measure": "欠陥修正",
+      "verdict": null,
+      "specPath": "",
+      "branch": "",
+      "adoptedAt": null,
+      "file": ".claude/improvements/viz--kakei-manager--d5c91de4.md"
+    }
+  ]
+}
