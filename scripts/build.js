@@ -26,6 +26,9 @@ const data = {
   config: readJson(join(ROOT, 'config.json'), {}),
   today: new Date().toISOString().slice(0, 10),
   builtAt: new Date().toLocaleString('ja-JP'),
+  // 常駐ウォッチャの最後の実行。1件だけ載せる。
+  // ウォッチャが黙って止まっていても、この日付が古いままなら画面で気づける
+  lastWatch: readJson(dataPath('watch_log.json'), []).slice(-1)[0] ?? null,
 };
 
 const template = readFileSync(join(UI, 'template.html'), 'utf8');

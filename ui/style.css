@@ -707,6 +707,50 @@ tbody tr:hover td { background: color-mix(in srgb, var(--ink) 6%, var(--surface)
   .tab { padding: 9px 10px 10px; font-size: 12.5px; }
 }
 
+/* ------------------------------------------------------- 要確認の確定フォーム */
+/* ローカルのパネル経由で開いたときだけ出る（file:// と公開版では従来の表のまま） */
+
+.rv-list { display: flex; flex-direction: column; gap: 10px; }
+
+.rv-item {
+  border: 1px solid var(--border); border-radius: 8px;
+  padding: 12px 14px; background: var(--plane);
+}
+
+.rv-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.rv-name { font-weight: 650; }
+.rv-meta { color: var(--ink-2); font-size: 12.5px; white-space: nowrap; }
+.rv-dates { color: var(--muted); font-size: 11.5px; margin: 4px 0 6px; }
+.rv-hint { color: var(--muted); font-size: 11.5px; margin: 10px 0 6px; }
+
+.rv-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+
+.rv-input {
+  padding: 7px 9px; font: inherit; font-size: 12.5px;
+  border: 1px solid var(--grid); border-radius: 6px;
+  background: var(--surface); color: var(--ink);
+  min-width: 0; flex: 1 1 150px;
+}
+
+.rv-btn {
+  padding: 7px 16px; font: inherit; font-size: 12.5px; font-weight: 650;
+  border: 1px solid var(--warning-line); border-radius: 6px;
+  background: var(--warning-line); color: var(--surface);
+  cursor: pointer; transition: opacity var(--dur-micro);
+  flex: 0 0 auto;
+}
+.rv-btn:hover { opacity: 0.85; }
+.rv-btn:disabled { opacity: 0.5; cursor: default; }
+
+.rv-status { font-size: 11.5px; color: var(--ink-2); margin-top: 6px; min-height: 1em; }
+.rv-status.is-error { color: var(--critical); }
+
+/* 幅が狭いときは縦に積む。選択肢が横に潰れると何を選んでいるか読めなくなる */
+@media (max-width: 560px) {
+  .rv-row { flex-direction: column; align-items: stretch; }
+  .rv-input, .rv-btn { flex: 1 1 auto; width: 100%; }
+}
+
 /* ---------------------------------------------------------------- misc */
 
 .hint { color: var(--muted); font-size: 11.5px; margin-top: 10px; }

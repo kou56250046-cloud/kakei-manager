@@ -319,6 +319,7 @@ function safe(label, fn, hostSel) {
 
 function render() {
   safe('今月の色', applyMonthTone);
+  safe('最後の自動反映', renderWatchStamp);
   safe('警告', renderBanner, '#banners');
   safe('期間フィルタ', renderFilterBar, '#filters');
   safe('サマリー', renderHero, '#hero');
@@ -339,6 +340,33 @@ function render() {
   safe('カード引落予定', renderPayments, '#payments');
   safe('取引一覧', renderTable, '#txtable');
   safe('タブの件数', updateTabBadges);
+}
+
+/**
+ * 最後に自動反映が走った日時を副題に足す。
+ *
+ * ★なぜ出すか
+ *   常駐ウォッチャは黙って止まりうる。止まっても画面は前回の内容を映し続けるため、
+ *   「反映されているつもりで古い数字を見ている」状態になる。
+ *   日付が出ていれば、それが何日も前のままだと気づける。
+ */
+// ★ ビルド時の副題を最初に控えておく。
+//   render() は期間を切り替えるたびに丸ごと走り直すため、
+//   textContent に足す書き方だと押すたびに同じ文が積み重なる（実際そうなっていた）。
+//   毎回この控えから組み立て直す。
+let baseSubtitle = null;
+
+function renderWatchStamp() {
+  const node = $('#page-sub');
+  if (!node) return;
+  if (baseSubtitle === null) baseSubtitle = node.textContent;
+
+  const w = DATA.lastWatch;
+  if (!w) { node.textContent = baseSubtitle; return; }
+
+  const d = new Date(w.at);
+  const when = `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  node.textContent = `${baseSubtitle}　最後の自動反映 ${when}${w.ok ? '' : '（失敗）'}`;
 }
 
 function renderBanner() {
@@ -393,12 +421,16 @@ function renderBanner() {
   }
   if (reviews.length > 0) {
     const total = reviews.reduce((a, r) => a + r.amount, 0);
+    // 確定できる画面かどうかで案内先を変える。読むだけの画面に
+    // 「下で選べます」と書いても、そこには選択肢が出ていない
+    const how = canEdit
+      ? '「明細」タブの要確認キューでそのまま確定できます。'
+      : '<code>npm run panel</code> を実行して <code>http://127.0.0.1:4649/</code> を開くと、画面上で確定できます。';
     host.appendChild(el('div', { class: 'banner' }, [
       el('span', { class: 'banner-icon', text: '?' }),
       el('div', {
         class: 'banner-body',
-        html: `<strong>要確認 ${reviews.length}件（${yenFmt(total)}円）</strong> — 分類が確定していない取引があります。`
-          + ' <code>data/category_rules.json</code> にルールを追記して <code>npm run review -- --all</code> で反映されます。',
+        html: `<strong>要確認 ${reviews.length}件（${yenFmt(total)}円）</strong> — 分類が確定していない取引があります。${how}`,
       }),
     ]));
   }
@@ -1492,6 +1524,123 @@ function renderFixedList() {
   }
 }
 
+/**
+ * この画面から分類を確定できるか。
+ *
+ * ★確定できるのは、ローカルのパネル経由で開いたときだけ。
+ *   file:// で開いた dist と、公開している docs（https）は今までどおり読むだけにする。
+ *   PANEL はサーバが配信時に差し込むもので、ファイル自体には入っていない。
+ */
+const canEdit = typeof PANEL !== 'undefined' && PANEL && PANEL.token
+  && location.protocol === 'http:'
+  && (location.hostname === '127.0.0.1' || location.hostname === 'localhost');
+
+/** 既存の分類から選択肢を作る。ルール定義そのものは埋め込まれていないため取引から拾う */
+function knownCategories() {
+  const map = new Map();
+  for (const t of TX) {
+    if (!t.category || t.category === '不明') continue;
+    if (!map.has(t.category)) map.set(t.category, new Set());
+    if (t.subcategory && t.subcategory !== '要確認') map.get(t.category).add(t.subcategory);
+  }
+  return map;
+}
+
+/** パネルへ送って、成功したら読み込み直す。分類と残高で共通 */
+async function postToPanel(path, payload, statusNode, button, working = '送信しています…') {
+  button.disabled = true;
+  statusNode.textContent = working;
+  statusNode.className = 'rv-status';
+  try {
+    const res = await fetch(path, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ...payload, token: PANEL.token }),
+    });
+    const body = await res.json();
+    if (!res.ok || !body.ok) {
+      statusNode.textContent = body.error ?? `失敗しました（${res.status}）`;
+      statusNode.className = 'rv-status is-error';
+      button.disabled = false;
+      return;
+    }
+    // ★ バックアップの失敗は黙って通さない。
+    //   docs/index.html は data/ の唯一の復元手段なので、
+    //   ここで流すと「取り込めているのにバックアップだけ古い」状態に気づけない
+    if (body.backedUp === false) {
+      statusNode.textContent = `${body.detail}。⚠ ただしバックアップ（docs/index.html）は更新できていません`;
+      statusNode.className = 'rv-status is-error';
+      setTimeout(() => location.reload(), 4000);
+      return;
+    }
+    statusNode.textContent = `${body.detail}。読み込み直します…`;
+    // 再分類とビルドが終わっているので、読み直せば結果が反映される
+    setTimeout(() => location.reload(), 600);
+  } catch (e) {
+    statusNode.textContent = `通信できませんでした（${e.message}）`;
+    statusNode.className = 'rv-status is-error';
+    button.disabled = false;
+  }
+}
+
+const submitClassify = (payload, statusNode, button) =>
+  postToPanel('/api/classify', payload, statusNode, button, '確定しています…');
+
+/** 1件ぶんの確定フォーム。「ルールにする」か「この1件だけ」かを選ばせる */
+function reviewForm(r) {
+  const cats = knownCategories();
+  const catSelect = el('select', { class: 'rv-input' }, [
+    el('option', { value: '', text: '大分類を選ぶ' }),
+    ...[...cats.keys()].map((c) => el('option', { value: c, text: c })),
+    el('option', { value: '__new__', text: '（新しい大分類を入力）' }),
+  ]);
+  const catNew = el('input', { class: 'rv-input', type: 'text', placeholder: '新しい大分類', hidden: true });
+  const subInput = el('input', { class: 'rv-input', type: 'text', placeholder: '中分類（省略可）', list: `subs-${r.key}` });
+  const subList = el('datalist', { id: `subs-${r.key}` });
+
+  const syncSubs = () => {
+    const c = catSelect.value === '__new__' ? '' : catSelect.value;
+    subList.replaceChildren(...[...(cats.get(c) ?? [])].map((s) => el('option', { value: s })));
+  };
+  catSelect.addEventListener('change', () => {
+    catNew.hidden = catSelect.value !== '__new__';
+    syncSubs();
+  });
+
+  const status = el('div', { class: 'rv-status' });
+  const mode = el('select', { class: 'rv-input' }, [
+    el('option', { value: 'rule', text: '店名ルールにする（翌月以降も自動で分類）' }),
+    el('option', { value: 'once', text: 'この取引だけ確定する（毎回中身が違う店）' }),
+  ]);
+
+  const button = el('button', {
+    class: 'rv-btn',
+    text: '確定する',
+    onclick: () => {
+      const category = catSelect.value === '__new__' ? catNew.value.trim() : catSelect.value;
+      if (!category) {
+        status.textContent = '大分類を選んでください。';
+        status.className = 'rv-status is-error';
+        return;
+      }
+      submitClassify({
+        mode: mode.value,
+        key: r.key,
+        category,
+        subcategory: subInput.value.trim(),
+        display: r.merchant,
+      }, status, button);
+    },
+  });
+
+  return el('div', { class: 'rv-form' }, [
+    el('div', { class: 'rv-hint', text: '扱う物が決まっている店はルールに、商業施設のように毎回中身が違う店は1件だけ確定してください。' }),
+    el('div', { class: 'rv-row' }, [mode, catSelect, catNew, subInput, button]),
+    subList,
+    status,
+  ]);
+}
+
 function renderReview() {
   const host = $('#review');
   host.replaceChildren();
@@ -1499,22 +1648,38 @@ function renderReview() {
     host.appendChild(el('div', { class: 'empty', text: '要確認の取引はありません ✅' }));
     return;
   }
-  const rows = reviews.map((r) => el('tr', {}, [
-    el('td', { class: 'strong', text: r.merchant }),
-    el('td', { class: 'num', text: yenFmt(r.amount) }),
-    el('td', { class: 'num', text: String(r.count) }),
-    el('td', { text: r.items.map((i) => i.date).join(', ') }),
-    el('td', {}, [el('code', { text: r.key, style: 'font-size:11px' })]),
-  ]));
-  host.appendChild(el('div', { class: 'tbl-wrap' }, [
-    el('table', {}, [
-      el('thead', {}, [el('tr', {}, [
-        el('th', { text: '店名' }), el('th', { class: 'num', text: '金額' }),
-        el('th', { class: 'num', text: '件数' }), el('th', { text: '利用日' }), el('th', { text: '正規化キー' }),
-      ])]),
-      el('tbody', {}, rows),
+
+  // 読むだけの画面（file:// と公開版）は従来どおりの一覧にする
+  if (!canEdit) {
+    const rows = reviews.map((r) => el('tr', {}, [
+      el('td', { class: 'strong', text: r.merchant }),
+      el('td', { class: 'num', text: yenFmt(r.amount) }),
+      el('td', { class: 'num', text: String(r.count) }),
+      el('td', { text: r.items.map((i) => i.date).join(', ') }),
+      el('td', {}, [el('code', { text: r.key, style: 'font-size:11px' })]),
+    ]));
+    host.appendChild(el('div', { class: 'tbl-wrap' }, [
+      el('table', {}, [
+        el('thead', {}, [el('tr', {}, [
+          el('th', { text: '店名' }), el('th', { class: 'num', text: '金額' }),
+          el('th', { class: 'num', text: '件数' }), el('th', { text: '利用日' }), el('th', { text: '正規化キー' }),
+        ])]),
+        el('tbody', {}, rows),
+      ]),
+    ]));
+    return;
+  }
+
+  // 金額の大きい順に並んでいる。上から数件片付ければ金額ベースではおおむね埋まる
+  host.appendChild(el('div', { class: 'rv-list' }, reviews.map((r) => el('div', { class: 'rv-item' }, [
+    el('div', { class: 'rv-head' }, [
+      el('span', { class: 'rv-name', text: r.merchant }),
+      el('span', { class: 'rv-meta', text: `${yenFmt(r.amount)}円 / ${r.count}件` }),
     ]),
-  ]));
+    el('div', { class: 'rv-dates', text: r.items.map((i) => i.date).slice(0, 8).join(', ') + (r.count > 8 ? ' …' : '') }),
+    el('div', {}, [el('code', { text: r.key, style: 'font-size:11px' })]),
+    reviewForm(r),
+  ]))));
 }
 
 function renderMerchants() {
@@ -1595,19 +1760,74 @@ function merchantPanel(merchant) {
   return wrap;
 }
 
+/**
+ * 残高を入れる欄。ローカルのパネル経由で開いたときだけ出す。
+ *
+ * ★ここが最後の「ターミナルを開く理由」だった。
+ *   残高はネットバンキングを見ないと分からないので自動化できない。
+ *   一方で残高が無いと「次の引落に足りるか」が判定できず、
+ *   このツールで唯一その場の行動につながる警告が働かない。
+ */
+function balanceForm(accounts, balances) {
+  const status = el('div', { class: 'rv-status' });
+  const inputs = accounts.map((a) => {
+    const prev = balances.filter((b) => b.account_id === a.id)
+      .sort((x, y) => x.date.localeCompare(y.date)).pop();
+    const input = el('input', {
+      class: 'rv-input', type: 'text', inputmode: 'numeric',
+      placeholder: prev ? `前回 ${yenFmt(prev.actual_balance)}円（${prev.date}）` : '記録なし',
+    });
+    return { account: a, input };
+  });
+
+  const button = el('button', {
+    class: 'rv-btn',
+    text: '残高を記録する',
+    onclick: async () => {
+      const targets = inputs.filter(({ input }) => input.value.trim() !== '');
+      if (targets.length === 0) {
+        status.textContent = '入れたい口座の欄に金額を入力してください。';
+        status.className = 'rv-status is-error';
+        return;
+      }
+      // 1件ずつ送る。サーバ側は直列に処理し、最後の1件でビルドまで通る
+      for (const { account, input } of targets) {
+        await postToPanel('/api/balance',
+          { accountId: account.id, amount: input.value },
+          status, button, `${account.name} を記録しています…`);
+        if (status.className.includes('is-error')) return;
+      }
+    },
+  });
+
+  return el('div', { class: 'rv-form' }, [
+    el('div', { class: 'rv-hint', text: 'ネットバンキングで見た今の残高を入れてください。空欄の口座は変わりません。' }),
+    ...inputs.map(({ account, input }) => el('div', { class: 'rv-row' }, [
+      el('span', { class: 'rv-name', style: 'flex:1 1 140px', text: account.name }),
+      input,
+    ])),
+    el('div', { class: 'rv-row' }, [button]),
+    status,
+  ]);
+}
+
 function renderAccounts() {
   const host = $('#accounts');
   const rows = accountBalances(DATA.accounts, DATA.balances, DATA.incomes, TX);
   const withData = rows.filter((r) => r.actual !== null);
+  const banks = (DATA.accounts ?? []).filter((a) => a.type === 'bank');
   host.replaceChildren();
   if (withData.length === 0) {
     host.appendChild(el('div', { class: 'setup-note' }, [
       el('div', { text: '口座残高は未登録です。' }),
       el('div', {
         style: 'margin-top:6px',
-        html: '<code>data/balances.json</code> に各口座の残高スナップショットを入れると、理論残高との差額（＝記録漏れ）が表示されます。',
+        html: canEdit
+          ? '下の欄に今の残高を入れると、理論残高との差額（＝記録漏れ）と「次の引落に足りるか」が出るようになります。'
+          : '<code>data/balances.json</code> に各口座の残高スナップショットを入れると、理論残高との差額（＝記録漏れ）が表示されます。',
       }),
     ]));
+    if (canEdit && banks.length) host.appendChild(balanceForm(banks, DATA.balances ?? []));
     return;
   }
   // 仕様書8.3：「使えるお金」と「貯めたお金」を混ぜない
@@ -1658,6 +1878,7 @@ function renderAccounts() {
           ? '　差額なし。記録漏れは見つかっていません。'
           : '　⚠ 差額は記録漏れの可能性があります（現金支出など）。'),
   }));
+  if (canEdit && banks.length) host.appendChild(balanceForm(banks, DATA.balances ?? []));
 }
 
 function renderPayments() {
