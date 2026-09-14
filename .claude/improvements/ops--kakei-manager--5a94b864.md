@@ -11,24 +11,27 @@ generated:
   targetFiles:
     - .claude/CLAUDE.md
 curated:
-  status: draft
-  statusReason: ""
+  status: adopted
+  statusReason: "auto-ingest の T0 として消化する。自動化で無人実行が増えるため、誤った前提が残っていると被害が大きい"
   effort: low
   measure: 欠陥修正
   expected:
     metric: "欠陥が再現しないこと"
     direction: down
   repro: "文書が唯一のバックアップを消す指示になっている。直ったかは記述の突き合わせで確かめる"
-  specPath: ""
-  branch: ""
-  adoptedAt: null
+  specPath: ".claude/specs/auto-ingest/"
+  branch: "main"
+  adoptedAt: 2026-09-14T02:05:23.000Z
 sources:
   - "ops-reviewer: data/ は gitignore 済みで Git 管理外。docs/ は暗号化バックアップを Pages 公開している。restore.js のコメント自身が「リポジトリはバックアップにならない」と書いている"
 evidence: []
 baseline:
-  capturedAt: null
-  mode: ""
-  metrics: {}
+  capturedAt: 2026-09-14T02:05:23.000Z
+  mode: "記述の突き合わせ"
+  metrics:
+    reproduced: true
+    誤読できる記述: 2
+    詳細: ".claude/CLAUDE.md に「データの正は data/*.json（Git管理）」と「GitHub Pages は使わない」の2箇所。実際は .gitignore に data/ があり、build-web.js が docs/ へ暗号化出力している"
 after:
   capturedAt: null
   mode: ""

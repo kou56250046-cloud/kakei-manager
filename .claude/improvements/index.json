@@ -56,7 +56,8 @@
   "counts": {
     "total": 15,
     "byStatus": {
-      "draft": 15
+      "draft": 13,
+      "adopted": 2
     },
     "byAxis": {
       "ダッシュボード": 3,
@@ -117,12 +118,12 @@
       "axis": "データの寿命と移行耐性",
       "anchor": "step7-buildWeb",
       "priority": "高",
-      "status": "draft",
+      "status": "adopted",
       "measure": "欠陥修正",
       "verdict": null,
-      "specPath": "",
-      "branch": "",
-      "adoptedAt": null,
+      "specPath": ".claude/specs/auto-ingest/",
+      "branch": "main",
+      "adoptedAt": "2026-09-14T02:05:23.000Z",
       "file": ".claude/improvements/data--kakei-manager--03bd7fd3.md"
     },
     {
@@ -234,12 +235,12 @@
       "axis": "運用性",
       "anchor": "絶対に守ること",
       "priority": "高",
-      "status": "draft",
+      "status": "adopted",
       "measure": "欠陥修正",
       "verdict": null,
-      "specPath": "",
-      "branch": "",
-      "adoptedAt": null,
+      "specPath": ".claude/specs/auto-ingest/",
+      "branch": "main",
+      "adoptedAt": "2026-09-14T02:05:23.000Z",
       "file": ".claude/improvements/ops--kakei-manager--5a94b864.md"
     },
     {

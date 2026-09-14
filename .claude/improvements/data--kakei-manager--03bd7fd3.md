@@ -11,24 +11,26 @@ generated:
   targetFiles:
     - scripts/close.js
 curated:
-  status: draft
-  statusReason: ""
+  status: adopted
+  statusReason: "auto-ingest の T2 で消化する。無人実行ではバックアップが黙って古くなる被害が大きいため"
   effort: low
   measure: 欠陥修正
   expected:
     metric: "欠陥が再現しないこと"
     direction: down
-  repro: "再現手順で確かめる"
-  specPath: ""
-  branch: ""
-  adoptedAt: null
+  repro: ".webpass を退避して npm run close -- --yes を実行する。build-web.js が失敗しても「⚠」1行で完走し、成功したように見える"
+  specPath: ".claude/specs/auto-ingest/"
+  branch: "main"
+  adoptedAt: 2026-09-14T02:05:23.000Z
 sources:
   - "ops-reviewer: close.js 238-240 行で try/catch し、失敗しても1行の警告で先へ進む"
 evidence: []
 baseline:
-  capturedAt: null
-  mode: ""
-  metrics: {}
+  capturedAt: 2026-09-14T02:05:23.000Z
+  mode: "コード確認"
+  metrics:
+    reproduced: true
+    詳細: "close.js:236-241 が build-web.js を try/catch し、失敗を1行の警告にして続行する。最終報告にバックアップの日付が出ないため、気づく手段が無い"
 after:
   capturedAt: null
   mode: ""

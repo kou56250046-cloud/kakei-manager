@@ -12,7 +12,7 @@ generated:
     - scripts/lib/io.js
 curated:
   status: draft
-  statusReason: ""
+  statusReason: "draft のまま残す。auto-ingest ではタイトルにある「writeJson の非アトミック書き込み」だけを tmp+rename で塞ぐが、本文が求めている schema 欄の導入（月別ファイルを { schema: 1, transactions: [...] } に包み、未知の schema で止める）は手を付けない。これを adopted にすると、測っていないものを直したことになる"
   effort: medium
   measure: 欠陥修正
   expected:
