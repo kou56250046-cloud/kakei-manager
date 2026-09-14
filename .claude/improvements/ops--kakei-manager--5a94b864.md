@@ -11,7 +11,7 @@ generated:
   targetFiles:
     - .claude/CLAUDE.md
 curated:
-  status: adopted
+  status: verified
   statusReason: "auto-ingest の T0 として消化する。自動化で無人実行が増えるため、誤った前提が残っていると被害が大きい"
   effort: low
   measure: 欠陥修正
@@ -24,7 +24,8 @@ curated:
   adoptedAt: 2026-09-14T02:05:23.000Z
 sources:
   - "ops-reviewer: data/ は gitignore 済みで Git 管理外。docs/ は暗号化バックアップを Pages 公開している。restore.js のコメント自身が「リポジトリはバックアップにならない」と書いている"
-evidence: []
+evidence:
+  - "2026-09-14 記述の突き合わせ: .claude/CLAUDE.md で誤読できる記述 2件 → 0件。残る2行は「古い記述｜実際」の訂正表の左列で、同じ行の右列が否定している。実装側（.gitignore:18 の `data/`、build-web.js の docs/ 出力3箇所）と文書が一致することを確認した"
 baseline:
   capturedAt: 2026-09-14T02:05:23.000Z
   mode: "記述の突き合わせ"
@@ -33,13 +34,19 @@ baseline:
     誤読できる記述: 2
     詳細: ".claude/CLAUDE.md に「データの正は data/*.json（Git管理）」と「GitHub Pages は使わない」の2箇所。実際は .gitignore に data/ があり、build-web.js が docs/ へ暗号化出力している"
 after:
-  capturedAt: null
-  mode: ""
-  metrics: {}
-verdict: null
+  capturedAt: 2026-09-14T07:30:00.000Z
+  mode: "記述の突き合わせ"
+  metrics:
+    reproduced: false
+    誤読できる記述: 0
+verdict: improved
 history:
   - at: 2026-09-10T12:35:02.194Z
     change: detected
+  - at: 2026-09-14T02:05:23.000Z
+    change: adopted（auto-ingest の T0）
+  - at: 2026-09-14T07:30:00.000Z
+    change: verified（再現手順を通して起きないことを確認）
 ---
 
 ## 何が問題か

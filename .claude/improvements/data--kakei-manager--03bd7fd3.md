@@ -11,7 +11,7 @@ generated:
   targetFiles:
     - scripts/close.js
 curated:
-  status: adopted
+  status: verified
   statusReason: "auto-ingest の T2 で消化する。無人実行ではバックアップが黙って古くなる被害が大きいため"
   effort: low
   measure: 欠陥修正
@@ -24,7 +24,9 @@ curated:
   adoptedAt: 2026-09-14T02:05:23.000Z
 sources:
   - "ops-reviewer: close.js 238-240 行で try/catch し、失敗しても1行の警告で先へ進む"
-evidence: []
+evidence:
+  - "2026-09-14 再現手順: .webpass を退避して `npm run close -- --yes --commit` を実行。失敗が2か所に出た（実行時『⚠ build-web.js が失敗しました（終了コード 1）／バックアップは更新されていません』、最終報告『バックアップ ⚠ 今回は更新できていません（最終 2026-09-14）』）。--commit も『ビルドが失敗しているためコミットを飛ばしました』で止まり、git log の先端は変わらなかった。修正前は『⚠ Web公開版の生成は飛ばしました』の1行のみで、報告に日付は出ず、--commit は古い docs/ を含んだままコミットしていた"
+  - "2026-09-14 ウォッチャ経由でも確認: 同条件で自動反映を走らせると data/watch_log.json に {ok:false, failed_step:'build-web.js'} が記録され、通知にも『バックアップ（docs/index.html）が更新されていません』が出た"
 baseline:
   capturedAt: 2026-09-14T02:05:23.000Z
   mode: "コード確認"
@@ -32,13 +34,20 @@ baseline:
     reproduced: true
     詳細: "close.js:236-241 が build-web.js を try/catch し、失敗を1行の警告にして続行する。最終報告にバックアップの日付が出ないため、気づく手段が無い"
 after:
-  capturedAt: null
-  mode: ""
-  metrics: {}
-verdict: null
+  capturedAt: 2026-09-14T07:31:00.000Z
+  mode: "再現手順"
+  metrics:
+    reproduced: false
+    失敗が表に出る箇所: 2
+    commitを止めるか: true
+verdict: improved
 history:
   - at: 2026-09-10T12:35:02.194Z
     change: detected
+  - at: 2026-09-14T02:05:23.000Z
+    change: adopted（auto-ingest の T2）
+  - at: 2026-09-14T07:31:00.000Z
+    change: verified（再現手順を通して起きないことを確認）
 ---
 
 ## 何が問題か
