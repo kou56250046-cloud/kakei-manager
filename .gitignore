@@ -40,3 +40,9 @@ Desktop.ini
 
 # ツールの検証用一時ファイル
 .playwright-mcp/
+
+# 常駐ウォッチャの在席票（PIDと鼓動。プロセスごとに変わる）
+.watch.lock
+
+# タスクスケジューラから起動するためのラッパー（install-watcher.js の生成物）
+scripts/watch-run.cmd

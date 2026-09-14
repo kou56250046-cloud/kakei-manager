@@ -26,5 +26,10 @@
   "display": {
     "unknown_category": "不明",
     "review_category": "要確認"
+  },
+  "panel": {
+    "port": 4649,
+    "open_browser": false,
+    "_note": "確定パネルは 127.0.0.1 のみに bind する。LAN の他端末からは開けない"
   }
 }

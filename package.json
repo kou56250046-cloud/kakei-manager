@@ -15,7 +15,12 @@
     "build:web": "node scripts/build-web.js",
     "restore": "node scripts/restore.js",
     "update": "npm run import && npm run import:payslip && npm run import:dcard && npm run generate && npm run build && npm run build:web",
-    "review": "node scripts/reclassify.js"
+    "review": "node scripts/reclassify.js",
+    "watch": "node scripts/watch.js",
+    "panel": "node scripts/panel.js",
+    "watch:install": "node scripts/install-watcher.js",
+    "watch:uninstall": "node scripts/install-watcher.js --uninstall",
+    "watch:status": "node scripts/install-watcher.js --status"
   },
   "engines": {
     "node": ">=20"
