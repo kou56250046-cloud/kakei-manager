@@ -77,6 +77,10 @@ const data = {
     categoryRules: readJson(dataPath('category_rules.json'), null),
     recurringIncomes: readJson(dataPath('recurring_incomes.json'), null),
     dcardBills: readJson(dataPath('dcard_bills.json'), null),
+    // 自動反映の履歴。復元しても家計の数字は変わらないが、
+    // 「いつから動いていなかったか」を後から辿れないと、抜けている月の原因が分からなくなる。
+    // ※ watch_state.json（ファイルの署名）と watch.out.log は入れない。作り直せる
+    watchLog: readJson(dataPath('watch_log.json'), null),
   },
   // ★ 見出しの副題も暗号化側に入れる。
   //   以前はこれを平文で埋め込んでいたため、合言葉なしで

@@ -106,6 +106,7 @@ const rules = data.backup?.categoryRules;
 console.log(`  分類ルール  ${String(rules?.rules?.length ?? 0).padStart(5)}件${rules ? '' : '  ⚠ このファイルは古く、分類ルールを含んでいません'}`);
 console.log(`  定期収入    ${String((data.backup?.recurringIncomes ?? []).length).padStart(5)}件`);
 console.log(`  dカード請求 ${String((data.backup?.dcardBills ?? []).length).padStart(5)}ヶ月`);
+console.log(`  自動反映履歴${String((data.backup?.watchLog ?? []).length).padStart(5)}件`);
 console.log('  ' + '─'.repeat(70));
 
 // --- 書き戻し ---------------------------------------------------------------
@@ -152,6 +153,7 @@ const files = [
 if (data.backup?.categoryRules) files.push(['category_rules.json', data.backup.categoryRules]);
 if (data.backup?.recurringIncomes) files.push(['recurring_incomes.json', data.backup.recurringIncomes]);
 if (data.backup?.dcardBills) files.push(['dcard_bills.json', data.backup.dcardBills]);
+if (data.backup?.watchLog) files.push(['watch_log.json', data.backup.watchLog]);
 
 for (const [name, value] of files) writeJson(join(outDir, name), value);
 

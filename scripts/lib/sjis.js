@@ -12,6 +12,16 @@ export function readSjisLines(path) {
 }
 
 /**
+ * Shift_JIS(CP932) のバイト列を文字列にする。
+ *
+ * Windows のコマンド（schtasks など）は日本語環境で CP932 を吐く。
+ * `spawnSync` に `encoding: 'utf8'` を渡すと化けて、出力を読み取る処理が黙って外れる。
+ */
+export function decodeSjis(buffer) {
+  return decoder.decode(buffer);
+}
+
+/**
  * CSVの1行をフィールド配列に分割する。
  * イオンの明細はクォートを使わない単純な形式だが、
  * 店名に , が入る可能性に備えてダブルクォートも解釈する。
