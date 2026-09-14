@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, renameSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -13,9 +13,29 @@ export function readJson(path, fallback = null) {
   return JSON.parse(text);
 }
 
+/**
+ * JSON を書く。
+ *
+ * ★ 同じ場所へ直接書かず、`.tmp` に書いてから rename で差し替える。
+ *   直接書くと、書き込みの途中で止まった（強制終了・電源断）ときに
+ *   中途半端なJSONがその場に残り、次回の readJson が例外を投げて全部止まる。
+ *   同一ボリューム内の rename は不可分なので、この経路なら
+ *   「古いまま」か「新しい内容」のどちらかにしかならない。
+ *
+ *   常駐ウォッチャと確定パネルから書く回数が増えたため、
+ *   中断に当たる確率が上がっている。
+ */
 export function writeJson(path, value) {
   mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, JSON.stringify(value, null, 2) + '\n', 'utf8');
+  const tmp = `${path}.tmp`;
+  try {
+    writeFileSync(tmp, JSON.stringify(value, null, 2) + '\n', 'utf8');
+    renameSync(tmp, path);
+  } catch (e) {
+    // 失敗したら .tmp を残さない。残すと次回の書き込みで古い残骸を掴む
+    try { rmSync(tmp, { force: true }); } catch { /* 消せなくても本来の例外を優先する */ }
+    throw e;
+  }
 }
 
 export function dataPath(...parts) {

@@ -13,10 +13,19 @@ import { dataPath, readJson } from './io.js';
 
 export function loadRules() {
   const raw = readJson(dataPath('category_rules.json'), { rules: [] });
-  return (raw.rules ?? []).map((r) => ({
-    ...r,
-    regex: new RegExp(r.pattern, 'i'), // merchant_key は大小を畳んでいないため i フラグで吸収
-  }));
+  const out = [];
+  for (const r of raw.rules ?? []) {
+    try {
+      // merchant_key は大小を畳んでいないため i フラグで吸収する
+      out.push({ ...r, regex: new RegExp(r.pattern, 'i') });
+    } catch (e) {
+      // ★ 壊れたパターン1件で全体を道連れにしない。
+      //   ここで例外を投げると取り込みも再分類もビルドも起動しなくなり、
+      //   原因が「ルールの書き方」だと気づきにくい。その1件だけ捨てて警告する
+      console.warn(`  ⚠ 分類ルールを1件飛ばしました（${r.pattern}）: ${e.message}`);
+    }
+  }
+  return out;
 }
 
 /**

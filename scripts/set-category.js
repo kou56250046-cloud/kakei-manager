@@ -1,4 +1,6 @@
 import { readAllTransactions, writeTransactionsByMonth, yen } from './lib/io.js';
+import { applyOverride } from './lib/classify-apply.js';
+import { readLock, roleName } from './lib/lock.js';
 
 /**
  * 特定の取引だけ分類を手で確定する。
@@ -22,6 +24,7 @@ import { readAllTransactions, writeTransactionsByMonth, yen } from './lib/io.js'
  *   --merchant 表示名を上書き
  *   --note     備考を上書き
  *   --dry      書き込まずに対象だけ表示する
+ *   --force    ウォッチャが動いていても実行する
  */
 
 const args = process.argv.slice(2);
@@ -37,6 +40,22 @@ if (!match || !category) {
   console.error('必須: --match <店名> --category <大分類>');
   console.error('例: node scripts/set-category.js --match ノクテイプラザ --category 教養・娯楽 --sub 書籍');
   process.exit(1);
+}
+
+// ★ ウォッチャ／確定パネルと同時に走らせない（close.js と同じ理由）。
+//   このスクリプトも readAllTransactions → 書き換え → writeTransactionsByMonth を通るため、
+//   取り込みと重なると、後から書いた側が相手の変更を丸ごと消す。
+//   「常駐させたまま商業施設の1件だけ手で確定する」は普通の使い方なので、実際に重なる。
+//   --dry は読むだけなので素通しする
+const holder = has('dry') ? null : readLock();
+if (holder && !has('force')) {
+  console.error('');
+  console.error(`  ${roleName(holder.role)}が動いています（PID ${holder.pid}）。`);
+  console.error('  同時に走らせると、片方の変更がもう片方に消されます。');
+  console.error(`  確定パネル（http://127.0.0.1:${holder.port}/）からも同じことができます。`);
+  console.error('  承知のうえで実行するなら --force を付けてください。');
+  console.error('');
+  process.exit(2);
 }
 
 const date = opt('date');
@@ -67,15 +86,15 @@ if (has('dry')) {
   process.exit(0);
 }
 
-for (const t of targets) {
-  t.category = category;
-  t.subcategory = opt('sub') ?? null;
-  if (opt('merchant')) t.merchant = opt('merchant');
-  if (opt('note')) t.note = opt('note');
-  t.needs_review = false;
-  t.confidence = 'high';
-  t.manual_override = true; // 以降 reclassify で上書きされない
-}
+// 立てるフィールドは lib/classify-apply.js が持つ。
+// close.js・確定パネルと同じ形にするため、ここで個別に書かない
+const targetSet = new Set(targets);
+const n = applyOverride(transactions, (t) => targetSet.has(t), {
+  category,
+  subcategory: opt('sub'),
+  merchant: opt('merchant'),
+  note: opt('note'),
+});
 
 writeTransactionsByMonth(transactions);
-console.log(`\n  ${targets.length}件を確定しました（manual_override）\n`);
+console.log(`\n  ${n}件を確定しました（manual_override）\n`);
