@@ -146,6 +146,51 @@ const html = template
   .replace('/*__PAYLOAD__*/null', () => JSON.stringify(payload))
   .replace('/*__APP_SRC__*/""', () => JSON.stringify(summary + '\n' + app));
 
+/**
+ * 平文が混入していないかの自己点検（コミット前の最後の砦）。
+ *
+ * 以前は「店名1件・手取り額1件・口座残高1件」だけを見ており、
+ * 自分が埋め込んだ subtitle（合計金額を含む）を検査対象から外していた。
+ * そのため穴を自分で開けて自分で見逃していた。
+ * ここでは暗号文を取り除いた残り全体を、機械的に総当たりする。
+ *
+ * ★ 書き出しより前に行う。以前は書いてから点検していたため、落ちても
+ *   平文入りの index.html が作業ツリーに残り、自動公開（lib/publish.js）が
+ *   後から拾ってプッシュし得た。点検に落ちたら docs/ には何も書かない。
+ */
+const scrubbed = html
+  .replace(payload.data, '')
+  .replace(payload.salt, '')
+  .replace(payload.iv, '');
+
+const leaks = [];
+
+// ① 3桁区切りの数字（金額の形をしたもの）が1つでも残っていたらアウト
+for (const m of new Set(scrubbed.match(/\d{1,3}(,\d{3})+/g) ?? [])) {
+  leaks.push(['金額らしき数字', m]);
+}
+
+// ② 店名（表示名・原文とも）
+const merchants = new Set();
+for (const t of transactions) {
+  for (const v of [t.merchant, t.merchant_raw]) if (v && v.length >= 3) merchants.add(v);
+}
+for (const m of merchants) if (scrubbed.includes(m)) leaks.push(['店名', m]);
+
+// ③ 収入・残高・固定費の金額（区切りなしの生の数字）
+const amounts = new Set();
+for (const i of data.incomes) for (const v of [i.net_amount, i.gross_amount]) if (v) amounts.add(String(v));
+for (const b of data.balances) if (b.actual_balance) amounts.add(String(b.actual_balance));
+for (const f of data.fixedCosts) if (f.amount) amounts.add(String(f.amount));
+for (const e of data.importLog) if (e.billed) amounts.add(String(e.billed));
+amounts.add(String(total));
+for (const a of amounts) if (a.length >= 4 && scrubbed.includes(a)) leaks.push(['金額', a]);
+
+if (leaks.length > 0) {
+  console.error(`\n  ✖ 平文が混入しています: ${leaks.map(([n]) => n).join(', ')} — docs/ は更新していません\n`);
+  process.exit(1);
+}
+
 const OUT_DIR = join(ROOT, 'docs');
 mkdirSync(OUT_DIR, { recursive: true });
 writeFileSync(join(OUT_DIR, 'index.html'), html, 'utf8');
@@ -247,50 +292,10 @@ self.addEventListener('fetch', (e) => {
 `;
 writeFileSync(join(OUT_DIR, 'sw.js'), sw, 'utf8');
 
-/**
- * 平文が混入していないかの自己点検（コミット前の最後の砦）。
- *
- * 以前は「店名1件・手取り額1件・口座残高1件」だけを見ており、
- * 自分が埋め込んだ subtitle（合計金額を含む）を検査対象から外していた。
- * そのため穴を自分で開けて自分で見逃していた。
- * ここでは暗号文を取り除いた残り全体を、機械的に総当たりする。
- */
-const scrubbed = html
-  .replace(payload.data, '')
-  .replace(payload.salt, '')
-  .replace(payload.iv, '');
-
-const leaks = [];
-
-// ① 3桁区切りの数字（金額の形をしたもの）が1つでも残っていたらアウト
-for (const m of new Set(scrubbed.match(/\d{1,3}(,\d{3})+/g) ?? [])) {
-  leaks.push(['金額らしき数字', m]);
-}
-
-// ② 店名（表示名・原文とも）
-const merchants = new Set();
-for (const t of transactions) {
-  for (const v of [t.merchant, t.merchant_raw]) if (v && v.length >= 3) merchants.add(v);
-}
-for (const m of merchants) if (scrubbed.includes(m)) leaks.push(['店名', m]);
-
-// ③ 収入・残高・固定費の金額（区切りなしの生の数字）
-const amounts = new Set();
-for (const i of data.incomes) for (const v of [i.net_amount, i.gross_amount]) if (v) amounts.add(String(v));
-for (const b of data.balances) if (b.actual_balance) amounts.add(String(b.actual_balance));
-for (const f of data.fixedCosts) if (f.amount) amounts.add(String(f.amount));
-for (const e of data.importLog) if (e.billed) amounts.add(String(e.billed));
-amounts.add(String(total));
-for (const a of amounts) if (a.length >= 4 && scrubbed.includes(a)) leaks.push(['金額', a]);
-
 console.log('');
 console.log(`  docs/index.html を生成しました（${(Buffer.byteLength(html) / 1024).toFixed(0)} KB）`);
 console.log('  PWA: manifest.webmanifest / sw.js / アイコン3種も出力しました');
 console.log(`  暗号化: ${payload.alg} / PBKDF2 ${ITERATIONS.toLocaleString()}回`);
 console.log(`  ${data.subtitle}（この行は暗号化側に入っており、公開HTMLには出ません）`);
-if (leaks.length > 0) {
-  console.error(`\n  ✖ 平文が混入しています: ${leaks.map(([n]) => n).join(', ')} — コミットしないでください\n`);
-  process.exit(1);
-}
 console.log('  ✅ 平文混入チェック: 家計データは暗号文のみ');
 console.log('');

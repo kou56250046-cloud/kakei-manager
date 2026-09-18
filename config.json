@@ -31,5 +31,9 @@
     "port": 4649,
     "open_browser": false,
     "_note": "確定パネルは 127.0.0.1 のみに bind する。LAN の他端末からは開けない"
+  },
+  "publish": {
+    "auto_push": true,
+    "_note": "ウォッチャと確定パネルが docs/ の生成物だけを自動でコミットし origin/main にプッシュする。false で無効"
   }
 }

@@ -7,6 +7,7 @@ import { ROOT, readAllTransactions, writeTransactionsByMonth } from './io.js';
 import { applyOverride, byKey, addRule } from './classify-apply.js';
 import { recordBalance, parseAmount } from './balance.js';
 import { snapshot } from './pipeline.js';
+import { schedulePublish, isCommitting } from './publish.js';
 
 /**
  * 分類が未確定の取引を、ダッシュボードの上で確定するためのローカルサーバ。
@@ -83,6 +84,8 @@ function classify(req) {
   if (!runScript('build.js')) return { ok: false, error: 'build.js が失敗しました' };
   // バックアップ（docs/index.html）も追随させる。失敗は致命ではないので続行し、理由を返す
   const backedUp = runScript('build-web.js');
+  // 公開は最後の確定から60秒後にまとめて行う。応答は待たない
+  if (backedUp) schedulePublish('classify');
 
   return { ok: true, detail, backedUp, pending: snapshot().pending };
 }
@@ -103,6 +106,7 @@ function balance(req) {
 
   if (!runScript('build.js')) return { ok: false, error: 'build.js が失敗しました' };
   const backedUp = runScript('build-web.js');
+  if (backedUp) schedulePublish('balance');
 
   return {
     ok: true,
@@ -173,6 +177,8 @@ export async function startPanel({ port = 4649, isBusy = () => false } = {}) {
 
       // 取り込み中は data/ を触らせない。両方が書くと片方の変更が消える
       if (isBusy()) return send(409, { ok: false, error: '取り込み中です。終わってからもう一度お試しください' });
+      // 公開が docs/ を git add〜commit している間に build-web.js が書くと、書きかけがコミットされる
+      if (isCommitting()) return send(409, { ok: false, error: '公開版をコミット中です。数秒後にもう一度お試しください' });
       if (busyWrite) return send(409, { ok: false, error: '前の確定を処理中です' });
 
       busyWrite = true;

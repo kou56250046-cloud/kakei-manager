@@ -5,6 +5,7 @@ import { runPipeline, ALL_STEPS, IMPORT_STEPS, BUILD_STEPS, stepLabel, snapshot,
 import { acquireLock } from './lib/lock.js';
 import { startPanel } from './lib/panel-server.js';
 import { notify } from './lib/notify.js';
+import { startPublish, holdWorktree, reportPublish } from './lib/publish.js';
 
 /**
  * フォルダにファイルを置くだけで家計アプリへ反映する常駐ウォッチャ。
@@ -37,6 +38,13 @@ const SETTLE_TIMEOUT_MS = 30_000;
 
 /** 履歴はこれだけ残す。暗号化バックアップに毎回同梱されるため、無制限には伸ばさない */
 const LOG_KEEP = 200;
+
+/**
+ * 起動してから未反映分の公開を試みるまでの待ち。
+ * ログオン直後はネットワークと資格情報マネージャがまだ整っておらず、
+ * すぐ push すると毎回「失敗」の通知が出る
+ */
+const CATCHUP_DELAY_MS = 120_000;
 
 const config = readJson(join(ROOT, 'config.json'), {});
 const port = config.panel?.port ?? 4649;
@@ -206,14 +214,18 @@ async function runOnce(files) {
   const before = snapshot();
   // 実行中に置かれたものを取りこぼさないよう、覚える姿はここで固定する
   const seenAtStart = scanAll();
-  lock.setBusy(true);
 
+  // ★ 前の公開が git add〜commit している最中なら、それが終わるのを待つ。
+  //   build-web.js が docs/ を書いている途中を add されると、書きかけがコミットされる。
+  //   取ったら直後の try で必ず返す（返し損ねると以後の公開がすべて止まる）
   const total = ALL_STEPS.length;
   const onStep = (offset) => (script, i) => line(`  [${offset + i + 1}/${total}] ${stepLabel(script)}`);
 
   let result;
   let imported = false;
+  const release = await holdWorktree();
   try {
+    lock.setBusy(true);
     // ★ 取り込みとビルドを分けて呼ぶ。
     //   間で watch_log.json を書いておかないと、build.js がそれを読む時点では
     //   まだ今回の記録が無く、画面の「最後の自動反映」が毎回1回ぶん古くなる。
@@ -234,6 +246,8 @@ async function runOnce(files) {
     }
   } finally {
     lock.setBusy(false);
+    // 鍵は公開の前に返す。startPublish は自分で鍵を取り直す（持ったまま呼ぶと待ち合って止まる）
+    release();
   }
 
   const after = snapshot();
@@ -258,9 +272,22 @@ async function runOnce(files) {
     added,
     pending: after.pending,
     mismatch: after.mismatch,
+    // プッシュは待たないので、ここでは暫定。終わったら下の then で書き換える
+    publish: result.ok ? 'pending' : 'skipped',
   }, { replaceSameStart: true });
 
   report(result, { added, after, seconds });
+
+  // ★ 公開はコミットまでだけ待つ（running は真のまま＝パネルは断られる）。
+  //   プッシュまで待つと、通信が詰まったときにパネルが数分「取り込み中」になる
+  if (result.ok) {
+    const pub = startPublish('import');
+    pub.result.then((res) => {
+      patchLog(at, { publish: res.status });
+      reportPublish(res, 'import');
+    });
+    await pub.committed;
+  }
 }
 
 function report(result, { added, after, seconds }) {
@@ -304,6 +331,15 @@ function appendLog(entry, { replaceSameStart = false } = {}) {
   else log.push(entry);
   // 古いものから捨てる。履歴は「いつから動いていないか」が分かれば足りる
   writeJson(dataPath('watch_log.json'), log.slice(-LOG_KEEP));
+}
+
+/** 既存の記録の一部だけ書き換える（公開の結果は実行の記録より後に分かるため） */
+function patchLog(at, patch) {
+  const log = readJson(dataPath('watch_log.json'), []);
+  const i = log.findIndex((e) => e.at === at);
+  if (i < 0) return;
+  log[i] = { ...log[i], ...patch };
+  writeJson(dataPath('watch_log.json'), log);
 }
 
 // ---------------------------------------------------------------- 起動
@@ -364,6 +400,12 @@ line();
     setTimeout(flush, 0);
   }
 }
+
+// ★ 前回プッシュに失敗して残ったコミットや、ウォッチャを止めていた間に
+//   手で build:web した docs/ を拾う。変化が無ければ何もしない（no_change）
+setTimeout(() => {
+  startPublish('catchup').result.then((res) => reportPublish(res, 'catchup'));
+}, CATCHUP_DELAY_MS);
 
 const shutdown = () => {
   for (const w of watchers) w.close();
