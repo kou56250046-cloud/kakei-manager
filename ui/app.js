@@ -469,9 +469,16 @@ function renderHero() {
     }
   }
 
-  const income = state.month
-    ? (DATA.incomes ?? []).filter((i) => i.date.slice(0, 7) === state.month).reduce((a, i) => a + (i.net_amount ?? 0), 0)
-    : (DATA.incomes ?? []).reduce((a, i) => a + (i.net_amount ?? 0), 0);
+  const scopedIncomes = state.month
+    ? (DATA.incomes ?? []).filter((i) => i.date.slice(0, 7) === state.month)
+    : (DATA.incomes ?? []);
+  const income = scopedIncomes.reduce((a, i) => a + (i.net_amount ?? 0), 0);
+
+  // ★ 手取り収入には給与明細以外（定期収入マスタから生成したもの）も入る。
+  //   注記を「給与明細より」のままにすると、差引支給額と食い違って見える。
+  //   何を足しているかを名前で出す
+  const incomeExtras = [...new Set(scopedIncomes.filter((i) => i.source !== 'payslip').map((i) => i.name))];
+  const incomeSource = incomeExtras.length ? `給与＋${incomeExtras.join('・')}` : '給与明細より';
 
   // 収入のあった「月数」。incomes.length はレコード数（給与＋児童手当）なので
   // そのまま出すと「13ヶ月分」のような誤った表示になる。
@@ -506,7 +513,7 @@ function renderHero() {
     ]),
     el('div', { class: 'tiles' }, [
       tile('取引件数', String(rows.length), '件'),
-      tile('手取り収入', yenFmt(income), '円', state.month ? '給与明細より' : `${incomeMonths}ヶ月分`),
+      tile('手取り収入', yenFmt(income), '円', state.month ? incomeSource : `${incomeMonths}ヶ月分・${incomeSource}`),
       // 収支は「プラスが良い」。支出の前月比（増＝赤）とは向きが逆なので注意
       income > 0
         ? tile('収支', yenFmt(income - total), '円',
