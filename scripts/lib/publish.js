@@ -16,8 +16,9 @@ import { notify } from './notify.js';
  * ★漏らさないための約束（リポジトリは public）
  *   1. コミットするのは ALLOWLIST のファイルだけ。`git commit -- <paths>` で呼ぶので、
  *      人が作業中の変更がインデックスにあっても巻き込まない
- *   2. 未プッシュのコミットに ALLOWLIST 以外のパスが1つでもあれば、プッシュしない（blocked）。
- *      人の作業途中のコミットを無人で公開しない
+ *   2. 未プッシュのコミットが「自分が作った定型メッセージのコミット」だけで、
+ *      変更が ALLOWLIST に収まっているときだけプッシュする。それ以外は blocked。
+ *      人の作業途中のコミットやマージを無人で公開しない（詳しくは pushPhase）
  *   3. コミットメッセージは定型文だけ。件数やファイル名（給与明細は氏名入り）を入れない
  *   4. pull / rebase はしない。リモートが先行していれば失敗として知らせ、人が直す
  *
@@ -71,7 +72,14 @@ export const isCommitting = () => committing;
 
 // ---------------------------------------------------------------- git
 
-function git(args, { root, timeoutMs }) {
+/**
+ * @param {boolean} [untilExit] 'exit' で終える（push 専用）。
+ *   push は git-remote-https を子に持ち、それが標準出力を握ったままだと 'close' が来ない。
+ *   一方 'exit' は標準出力を読み切る前に来ることがあるため、出力を判定に使う
+ *   コマンド（rev-parse / rev-list / log / diff）は必ず 'close' で終える。
+ *   切れた出力で判定すると、未プッシュを見落としたり、許可リスト外のパスを見逃したりする
+ */
+function git(args, { root, timeoutMs }, { untilExit = false } = {}) {
   return new Promise((resolve) => {
     const child = spawn('git', args, {
       cwd: root,
@@ -86,9 +94,7 @@ function git(args, { root, timeoutMs }) {
     child.stdout.on('data', (c) => { stdout += c; });
     child.stderr.on('data', (c) => { stderr += c; });
     child.on('error', (e) => finish({ code: -1, stdout, stderr: String(e?.message ?? e) }));
-    // ★ 'close' ではなく 'exit' で終える。push は git-remote-https を子に持ち、
-    //   それが標準出力を握ったままだと 'close' が来ない
-    child.on('exit', (code) => finish({ code, stdout, stderr }));
+    child.on(untilExit ? 'exit' : 'close', (code) => finish({ code, stdout, stderr }));
 
     const timer = setTimeout(() => {
       // 子プロセスごと落とす。git.exe だけ殺すと git-remote-https が残って資格情報を待ち続ける
@@ -113,10 +119,17 @@ const lastLine = (s) => {
 
 // ---------------------------------------------------------------- 本体
 
-let chain = Promise.resolve();
+// ★ 直列化はコミットとプッシュで別の鎖にする。
+//   1本にすると、遅いプッシュの間は次のコミットも待たされ、
+//   ウォッチャの running が真のまま残って確定パネルが「取り込み中」を返し続ける
+let commitChain = Promise.resolve();
+let pushChain = Promise.resolve();
+
+const AUTO_MESSAGES = new Set(Object.values(MESSAGES));
+const lines = (s) => s.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
 
 /**
- * 公開を1回走らせる。呼び出しは直列化され、前の公開（プッシュ含む）が終わってから始まる。
+ * 公開を1回走らせる。コミットはコミット同士、プッシュはプッシュ同士で直列化される。
  *
  * @param {'import'|'classify'|'balance'|'catchup'} reason
  * @param {object} [opts]
@@ -128,16 +141,15 @@ let chain = Promise.resolve();
  *   先に並んでいる公開がその鍵を待っていると、互いに待ち合って止まる。
  */
 export function startPublish(reason, { root = ROOT, timeoutMs = GIT_TIMEOUT_MS } = {}) {
-  let markCommitted;
-  const committed = new Promise((r) => { markCommitted = r; });
+  const opt = { root, timeoutMs };
 
-  const run = async () => {
+  // コミット区間。結果を返したら終わり（その結果が最終結果）、null ならプッシュへ進む
+  const commitPhase = async () => {
     let unlock = null;
     try {
       const config = readJson(join(root, 'config.json'), {});
       if (config.publish?.auto_push !== true) return { status: 'disabled' };
 
-      const opt = { root, timeoutMs };
       const head = await git(['rev-parse', '--abbrev-ref', 'HEAD'], opt);
       if (head.code !== 0) return { status: 'commit_failed', detail: lastLine(head.stderr) };
       if (head.stdout.trim() !== 'main') return { status: 'not_main', detail: head.stdout.trim() };
@@ -162,35 +174,90 @@ export function startPublish(reason, { root = ROOT, timeoutMs = GIT_TIMEOUT_MS }
         committing = false;
         unlock();
         unlock = null;
-        markCommitted();
       }
-
-      // ---- プッシュ区間（作業ツリーは触らない）
-      const log = await git(['log', '--format=', '--name-only', 'origin/main..HEAD'], opt);
-      if (log.code !== 0) return { status: 'push_failed', detail: lastLine(log.stderr) };
-      const changed = [...new Set(log.stdout.split(/\r?\n/).map((l) => l.trim()).filter(Boolean))];
-      const unpushed = await git(['rev-list', '--count', 'origin/main..HEAD'], opt);
-      if (unpushed.code !== 0) return { status: 'push_failed', detail: lastLine(unpushed.stderr) };
-      if (Number(unpushed.stdout.trim()) === 0) return { status: 'no_change' };
-
-      const outside = changed.filter((p) => !ALLOWLIST.includes(p));
-      if (outside.length > 0) return { status: 'blocked', detail: `${outside.length}件のパス` };
-
-      const push = await git(['push', 'origin', 'main'], opt);
-      if (push.code !== 0) return { status: 'push_failed', detail: lastLine(push.stderr) };
-      return { status: 'pushed' };
+      return null;
     } catch (e) {
       return { status: 'commit_failed', detail: String(e?.message ?? e) };
     } finally {
       // 例外で抜けた場合も鍵は必ず返す
       if (unlock) unlock();
-      markCommitted();
     }
   };
 
-  const result = chain.then(run);
-  chain = result.catch(() => {});
+  const commitStep = commitChain.then(commitPhase);
+  commitChain = commitStep.then(() => {}, () => {});
+  const committed = commitStep.then(() => {}, () => {});
+
+  const result = commitStep.then((early) => {
+    if (early) return early;
+    const pushStep = pushChain.then(() => pushPhase(opt));
+    pushChain = pushStep.then(() => {}, () => {});
+    return pushStep;
+  });
   return { committed, result };
+}
+
+/**
+ * プッシュ区間。作業ツリーは触らない。
+ *
+ * ★ 送るのは「自分が作った定型メッセージのコミットだけ」が並んでいるときに限る。
+ *   パスだけを見ていると、次の2つをすり抜ける。
+ *   - マージコミット：`git log --name-only` は既定でマージの差分を出さないため、
+ *     pull の衝突解消で持ち込んだ ui/ の変更などが一覧に現れない
+ *   - 人が docs/ だけを手でコミットし、メッセージに金額などを書いたまま置いてあるもの
+ *   どちらも blocked にして、人に git push を任せる。
+ *
+ * ★ 判定した SHA をそのまま送る（`<sha>:refs/heads/main`）。
+ *   `git push origin main` だと、判定から送信までの間に人が足したコミットまで送る。
+ *
+ * ★ `--force-with-lease` で「リモートが手元の origin/main のままであること」を条件にする。
+ *   漏洩したコミットを消すためにリモートを巻き戻しても、手元の origin/main は古いままなので、
+ *   条件なしで送ると消したコミットを再び載せてしまう。
+ *   （先に祖先関係を確かめているので、これで履歴を上書きすることは無い）
+ */
+async function pushPhase(opt) {
+  const tip = await git(['rev-parse', 'HEAD'], opt);
+  if (tip.code !== 0) return { status: 'push_failed', detail: lastLine(tip.stderr) };
+  const head = tip.stdout.trim();
+  const baseRes = await git(['rev-parse', '--verify', 'origin/main'], opt);
+  if (baseRes.code !== 0) return { status: 'push_failed', detail: lastLine(baseRes.stderr) };
+  const base = baseRes.stdout.trim();
+  const range = `${base}..${head}`;
+
+  const count = await git(['rev-list', '--count', range], opt);
+  const n = count.stdout.trim();
+  if (count.code !== 0 || !/^\d+$/.test(n)) {
+    return { status: 'push_failed', detail: lastLine(count.stderr) || '未プッシュの件数を読めませんでした' };
+  }
+  if (n === '0') return { status: 'no_change' };
+
+  const ancestor = await git(['merge-base', '--is-ancestor', base, head], opt);
+  if (ancestor.code === 1) return { status: 'push_failed', detail: 'リモートと履歴が分かれています。手で統合してください' };
+  if (ancestor.code !== 0) return { status: 'push_failed', detail: lastLine(ancestor.stderr) };
+
+  const merges = await git(['rev-list', '--merges', range], opt);
+  if (merges.code !== 0) return { status: 'push_failed', detail: lastLine(merges.stderr) };
+  if (lines(merges.stdout).length > 0) return { status: 'blocked', detail: 'マージコミット' };
+
+  const msgs = await git(['log', '--format=%B%x00', range], opt);
+  if (msgs.code !== 0) return { status: 'push_failed', detail: lastLine(msgs.stderr) };
+  const subjects = msgs.stdout.split('\0').map((m) => m.trim()).filter(Boolean);
+  if (subjects.length !== Number(n) || subjects.some((m) => !AUTO_MESSAGES.has(m))) {
+    return { status: 'blocked', detail: '手で作ったコミット' };
+  }
+
+  const diff = await git(['diff', '--name-only', base, head], opt);
+  if (diff.code !== 0) return { status: 'push_failed', detail: lastLine(diff.stderr) };
+  const outside = lines(diff.stdout).filter((p) => !ALLOWLIST.includes(p));
+  if (outside.length > 0) return { status: 'blocked', detail: `${outside.length}件のパス` };
+
+  const push = await git(
+    ['push', `--force-with-lease=main:${base}`, 'origin', `${head}:refs/heads/main`],
+    opt,
+    { untilExit: true },
+  );
+  if (push.code !== 0) return { status: 'push_failed', detail: lastLine(push.stderr) };
+  return { status: 'pushed' };
 }
 
 // ---------------------------------------------------------------- パネル用の予約
@@ -209,7 +276,8 @@ export function schedulePublish(reason, { delayMs = 60_000, onResult = reportPub
     const r = pendingReason;
     timer = null;
     pendingReason = null;
-    startPublish(r, opts).result.then((res) => onResult(res, r));
+    // 後処理の例外を捕まえずに流すと、未処理の拒否でウォッチャごと落ちる
+    startPublish(r, opts).result.then((res) => onResult(res, r)).catch((e) => console.error('  ⚠ 公開の後処理に失敗:', e?.message ?? e));
   }, delayMs);
 }
 
@@ -227,15 +295,19 @@ export function reportPublish(res, reason = '') {
     no_change: '公開版に変化なし',
     disabled: '自動公開は無効（config.json の publish.auto_push）',
     not_main: `main 以外のブランチ（${res.detail}）のため公開を見送り`,
-    blocked: 'docs/ 以外の未プッシュのコミットがあるため公開を見送り',
+    blocked: `自動で作っていない未プッシュのコミット（${res.detail}）があるため公開を見送り`,
     commit_failed: `公開版のコミットに失敗: ${res.detail}`,
     push_failed: `公開版のプッシュに失敗: ${res.detail}`,
   }[res.status] ?? res.status;
   console.log(`  ${stamp()}  [公開${reason ? `:${reason}` : ''}] ${label}`);
 
   if (res.status === 'blocked') {
-    notify('公開版の更新を見送りました', ['docs/ 以外の未プッシュのコミットがあります', 'git push を手動で行ってください']);
+    notify('公開版の更新を見送りました', [`未プッシュのコミットに${res.detail}があります`, '中身を確かめて git push を手動で行ってください']);
   } else if (res.status === 'push_failed' || res.status === 'commit_failed') {
-    notify('公開版の更新に失敗', [res.detail || '理由不明', '次の自動反映で再試行します']);
+    // git が途中で打ち切られると .git/index.lock が残り、消すまで毎回コミットに失敗する
+    const hint = /index\.lock/.test(res.detail ?? '')
+      ? '.git/index.lock を消してください（git が動いていないことを確かめてから）'
+      : '次の自動反映で再試行します';
+    notify('公開版の更新に失敗', [res.detail || '理由不明', hint]);
   }
 }

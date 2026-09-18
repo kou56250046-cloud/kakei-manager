@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { webcrypto as crypto } from 'node:crypto';
 import { ROOT, dataPath, readJson, readAllTransactions, yen } from './lib/io.js';
@@ -22,6 +22,24 @@ import { renderIcon } from './lib/icon.js';
  *   node scripts/build-web.js --pass "合言葉"
  *   （または .webpass ファイルに合言葉を書いておく。.gitignore 済み）
  */
+
+/**
+ * docs/ へは一時ファイルに書いてから rename で差し替える。
+ *
+ * ★ 自動公開（lib/publish.js）はウォッチャの外で走るビルド（手で叩いた npm run update など）とは
+ *   排他が取れない。直接書くと、書きかけの index.html を git add してプッシュし得る。
+ *   同じボリューム内の rename は不可分なので、読む側には「古い」か「新しい」しか見えない。
+ */
+function writeAtomic(path, content, encoding) {
+  const tmp = `${path}.tmp`;
+  try {
+    writeFileSync(tmp, content, encoding);
+    renameSync(tmp, path);
+  } catch (e) {
+    try { rmSync(tmp, { force: true }); } catch { /* 消せなくても本来の例外を優先する */ }
+    throw e;
+  }
+}
 
 const ITERATIONS = 600000; // OWASP 2023 の PBKDF2-SHA256 推奨値
 
@@ -183,8 +201,26 @@ for (const i of data.incomes) for (const v of [i.net_amount, i.gross_amount]) if
 for (const b of data.balances) if (b.actual_balance) amounts.add(String(b.actual_balance));
 for (const f of data.fixedCosts) if (f.amount) amounts.add(String(f.amount));
 for (const e of data.importLog) if (e.billed) amounts.add(String(e.billed));
+for (const t of data.tithe) for (const v of [t.amount, t.paid_amount]) if (v) amounts.add(String(v));
+for (const d of data.backup.dcardBills ?? []) for (const v of [d.amount, d.line_sum]) if (v) amounts.add(String(v));
 amounts.add(String(total));
 for (const a of amounts) if (a.length >= 4 && scrubbed.includes(a)) leaks.push(['金額', a]);
+
+// ④ 口座名・固定費名・定期収入名・分類ルール・正規化後の店名キー
+//   自動公開でこの点検が唯一の関門になったため、ui/*.js のコメントに
+//   これらを書いてしまったときも止める（3文字未満は一般語と区別できないので見ない）
+const names = new Set();
+for (const a of data.accounts) if (a.name) names.add(a.name);
+for (const f of data.fixedCosts) if (f.name) names.add(f.name);
+for (const r of data.backup.recurringIncomes ?? []) if (r.name) names.add(r.name);
+for (const r of data.backup.categoryRules?.rules ?? []) for (const v of [r.pattern, r.display]) if (v) names.add(v);
+for (const t of transactions) if (t.merchant_key) names.add(t.merchant_key);
+// 画面の文言やコメントに一般語として出るもの。個人を特定しないので公開してよい。
+// ここに足すのは「誰の家計にも出てくる語」だけにする（店名・口座名は足さない）
+const GENERIC_WORDS = new Set(['dカード', '児童手当']);
+for (const n of names) {
+  if (n.length >= 3 && !GENERIC_WORDS.has(n) && scrubbed.includes(n)) leaks.push(['名前', n]);
+}
 
 if (leaks.length > 0) {
   console.error(`\n  ✖ 平文が混入しています: ${leaks.map(([n]) => n).join(', ')} — docs/ は更新していません\n`);
@@ -193,7 +229,7 @@ if (leaks.length > 0) {
 
 const OUT_DIR = join(ROOT, 'docs');
 mkdirSync(OUT_DIR, { recursive: true });
-writeFileSync(join(OUT_DIR, 'index.html'), html, 'utf8');
+writeAtomic(join(OUT_DIR, 'index.html'), html, 'utf8');
 writeFileSync(join(OUT_DIR, '.nojekyll'), '', 'utf8');
 
 // --- PWA（ホーム画面に置いて、オフラインでも開けるようにする） ----------------
@@ -212,7 +248,7 @@ const ICONS = [
   ['icon-512.png', 512],
   ['apple-touch-icon.png', 180], // iOS のホーム画面追加は PNG のこの名前を見る
 ];
-for (const [name, size] of ICONS) writeFileSync(join(OUT_DIR, name), renderIcon(size));
+for (const [name, size] of ICONS) writeAtomic(join(OUT_DIR, name), renderIcon(size));
 
 const manifest = {
   id: 'kakei-manager',
@@ -233,7 +269,7 @@ const manifest = {
     { src: './icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
   ],
 };
-writeFileSync(join(OUT_DIR, 'manifest.webmanifest'), JSON.stringify(manifest, null, 2), 'utf8');
+writeAtomic(join(OUT_DIR, 'manifest.webmanifest'), JSON.stringify(manifest, null, 2), 'utf8');
 
 // キャッシュ名にビルド時刻を入れる。これが変わることでブラウザが sw.js の更新を検知し、
 // activate で古い世代（＝先月の家計データを抱えたHTML）を確実に捨てられる
@@ -290,7 +326,7 @@ self.addEventListener('fetch', (e) => {
   })());
 });
 `;
-writeFileSync(join(OUT_DIR, 'sw.js'), sw, 'utf8');
+writeAtomic(join(OUT_DIR, 'sw.js'), sw, 'utf8');
 
 console.log('');
 console.log(`  docs/index.html を生成しました（${(Buffer.byteLength(html) / 1024).toFixed(0)} KB）`);

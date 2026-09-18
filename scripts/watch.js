@@ -282,10 +282,12 @@ async function runOnce(files) {
   //   プッシュまで待つと、通信が詰まったときにパネルが数分「取り込み中」になる
   if (result.ok) {
     const pub = startPublish('import');
+    // ★ 後処理の例外は必ず捕まえる。watch_log.json が一時的に書けないだけで
+    //   未処理の拒否になり、uncaughtException でウォッチャごと落ちる
     pub.result.then((res) => {
       patchLog(at, { publish: res.status });
       reportPublish(res, 'import');
-    });
+    }).catch((e) => line(`  ⚠ 公開の後処理に失敗: ${e?.message ?? e}`));
     await pub.committed;
   }
 }
@@ -404,7 +406,9 @@ line();
 // ★ 前回プッシュに失敗して残ったコミットや、ウォッチャを止めていた間に
 //   手で build:web した docs/ を拾う。変化が無ければ何もしない（no_change）
 setTimeout(() => {
-  startPublish('catchup').result.then((res) => reportPublish(res, 'catchup'));
+  startPublish('catchup').result
+    .then((res) => reportPublish(res, 'catchup'))
+    .catch((e) => line(`  ⚠ 公開の後処理に失敗: ${e?.message ?? e}`));
 }, CATCHUP_DELAY_MS);
 
 const shutdown = () => {
