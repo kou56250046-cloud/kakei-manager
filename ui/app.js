@@ -478,7 +478,11 @@ function renderHero() {
   //   注記を「給与明細より」のままにすると、差引支給額と食い違って見える。
   //   何を足しているかを名前で出す
   const incomeExtras = [...new Set(scopedIncomes.filter((i) => i.source !== 'payslip').map((i) => i.name))];
-  const incomeSource = incomeExtras.length ? `給与＋${incomeExtras.join('・')}` : '給与明細より';
+  // 給与明細がまだ無い月（支給日前の当月など）に「給与＋」と出さない
+  const hasPayslip = scopedIncomes.some((i) => i.source === 'payslip');
+  const incomeSource = !incomeExtras.length ? '給与明細より'
+    : hasPayslip ? `給与＋${incomeExtras.join('・')}`
+    : incomeExtras.join('・');
 
   // 収入のあった「月数」。incomes.length はレコード数（給与＋児童手当）なので
   // そのまま出すと「13ヶ月分」のような誤った表示になる。
