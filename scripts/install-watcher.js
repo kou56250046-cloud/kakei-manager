@@ -48,8 +48,29 @@ const LOG_REL = 'data\\watch.out.log';
  *
  *   最大でこの間隔ぶん反応が遅れるが、起動時に「止まっている間に置かれたファイル」を
  *   拾う仕掛けがあるので、取りこぼしにはならない。
+ *
+ * ★1日にしている理由
+ *   触るのは月に1回で、ログオン時にも起動する。30分おきに見張る必要はない。
  */
-const CHECK_INTERVAL = process.env.KAKEI_WATCH_INTERVAL || 'PT30M'; // 検証時だけ環境変数で縮める
+const CHECK_INTERVAL = process.env.KAKEI_WATCH_INTERVAL || 'P1D'; // 検証時だけ環境変数で縮める
+
+/** 'P1D' / 'PT30M' を「1日」「30分」にする。案内文に出すだけ */
+const intervalLabel = (iso) => {
+  const m = String(iso).match(/^P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?)?$/);
+  if (!m) return iso;
+  return [[m[1], '日'], [m[2], '時間'], [m[3], '分']].filter(([n]) => n).map(([n, u]) => n + u).join('') || iso;
+};
+
+/**
+ * 窓を出さずに .cmd を動かすための起動役。
+ *
+ * ★なぜ必要か
+ *   InteractiveToken で .cmd を直接起動すると、生存確認のたびにコンソール窓が出る。
+ *   その窓を閉じるとウォッチャごと止まり（ログに ^C が残る）、次の確認でまた窓が出る。
+ *   conhost.exe --headless は窓を作らずにコンソールを与える（Windows 11 で利用可）。
+ *   S4U（ログオンしていなくても実行）でも窓は消えるが、通知が届かなくなるので使わない。
+ */
+const CONHOST = join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'conhost.exe');
 
 const args = process.argv.slice(2);
 const mode = args.includes('--uninstall') ? 'uninstall' : args.includes('--status') ? 'status' : 'install';
@@ -167,7 +188,8 @@ const xml = `<?xml version="1.0" encoding="UTF-16"?>
   </Settings>
   <Actions Context="Author">
     <Exec>
-      <Command>${esc(CMD_PATH)}</Command>
+      <Command>${esc(CONHOST)}</Command>
+      <Arguments>${esc(`--headless cmd.exe /c "${CMD_PATH}"`)}</Arguments>
       <WorkingDirectory>${esc(ROOT)}</WorkingDirectory>
     </Exec>
   </Actions>
@@ -185,7 +207,7 @@ console.log('');
 if (r.status === 0) {
   console.log(`  登録しました（タスク名: ${TASK_NAME}）。`);
   console.log('  次にログオンしたときから、ウォッチャが自動で立ち上がります。');
-  console.log(`  落ちていないかを ${CHECK_INTERVAL.replace('PT', '').toLowerCase()} ごとに見て、`
+  console.log(`  落ちていないかを ${intervalLabel(CHECK_INTERVAL)}ごとに見て、`
     + '止まっていれば立て直します。コンソールの窓は出ません。');
   console.log('');
   console.log(`  ログ: ${join(ROOT, LOG_REL)}`);
